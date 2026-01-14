@@ -78,6 +78,7 @@ tracing = [
 # HIP (Heterogeneous-computing Interface for Portability) for AMD
 # => base docker rocm/vllm-dev:20250114, not from public vllm whl
 srt_hip = [
+    "sgl-kernel @ https://github.com/sgl-project/whl/releases/download/v0.3.20/sgl_kernel-0.3.20+rocm700-cp310-abi3-manylinux2014_x86_64.whl",
   "sglang[runtime_common]",
   "torch",
   "petit_kernel==0.0.2",
