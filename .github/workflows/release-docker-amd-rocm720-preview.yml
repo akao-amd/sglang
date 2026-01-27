@@ -68,7 +68,7 @@ jobs:
           version=${{ steps.version.outputs.version }}
           echo "Version: ${version}"
 
-          if [ "${{ matrix.gpu_arch }}" = "gfx942-rocm700" ]; then
+          if [ "${{ matrix.gpu_arch }}" = "gfx942-rocm720" ]; then
             rocm_tag="rocm720-mi30x"
           elif [ "${{ matrix.gpu_arch }}" = "gfx950-rocm720" ]; then
             rocm_tag="rocm720-mi35x"
