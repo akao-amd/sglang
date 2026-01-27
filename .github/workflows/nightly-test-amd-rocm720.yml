@@ -59,11 +59,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx942-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -87,11 +87,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx942-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -114,11 +114,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx942-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -142,11 +142,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx942-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -171,11 +171,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx942-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -200,11 +200,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx942-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -237,11 +237,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx942-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -265,11 +265,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx942-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -306,11 +306,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx942-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -347,11 +347,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx942-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -389,11 +389,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx950-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi35x-20260127-preview --gpu-arch gfx950-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -416,11 +416,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx950-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi35x-20260127-preview --gpu-arch gfx950-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -443,11 +443,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx950-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi35x-20260127-preview --gpu-arch gfx950-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -484,11 +484,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx950-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi35x-20260127-preview --gpu-arch gfx950-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -525,11 +525,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx950-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi35x-20260127-preview --gpu-arch gfx950-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -564,11 +564,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx950-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi35x-20260127-preview --gpu-arch gfx950-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -592,11 +592,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx950-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi35x-20260127-preview --gpu-arch gfx950-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -620,11 +620,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Build and setup docker (ROCm 7.2)
+      - name: Setup docker (ROCm 7.2)
         timeout-minutes: 120
         run: |
           touch github_summary.md
-          bash scripts/ci/amd/amd_ci_start_container.sh --build-from-dockerfile --gpu-arch gfx950-rocm720
+          bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi35x-20260127-preview --gpu-arch gfx950-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 

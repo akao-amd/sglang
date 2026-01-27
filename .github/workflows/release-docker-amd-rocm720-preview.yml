@@ -1,19 +1,5 @@
 name: Release Docker Images ROCm 7.2.0 Preview (AMD)
-on:
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "docker/rocm720.Dockerfile"
-      - ".github/workflows/release-docker-amd-rocm720-preview.yml"
-  push:
-    tags:
-      - 'v[0-9]+.*'
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to build (without v prefix, e.g., 0.5.7)'
-        required: true
+on: []
 
 concurrency:
   # A PR number if a pull request and otherwise the commit hash. This cancels

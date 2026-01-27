@@ -1,4 +1,4 @@
-name: PR Test (AMD)
+name: PR Test ROCm 7.2 (AMD)
 # Dynamic run-name for /rerun-stage commands to enable URL lookup
 # Format: "[stage-name] sha" for fork PRs, "[stage-name]" for non-fork, default for normal runs
 run-name: ${{ inputs.target_stage && (inputs.pr_head_sha && format('[{0}] {1}', inputs.target_stage, inputs.pr_head_sha) || format('[{0}]', inputs.target_stage)) || '' }}
@@ -14,7 +14,7 @@ on:
       - ".github/workflows/pr-test-amd.yml"
       - "docker/rocm.Dockerfile"
   pull_request:
-    branches: [ dont-trigger-this-one-anyway ]
+    branches: [ main ]
     paths:
       - "python/**"
       - "scripts/ci/**"
@@ -132,13 +132,9 @@ jobs:
         run: bash scripts/ensure_vram_clear.sh rocm
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: |
-          bash scripts/ci/amd/amd_ci_install_dependency.sh
 
       - name: Run test
         timeout-minutes: 14
@@ -180,13 +176,9 @@ jobs:
         run: bash scripts/ensure_vram_clear.sh rocm
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: |
-          bash scripts/ci/amd/amd_ci_install_dependency.sh
 
       - name: Run test
         timeout-minutes: 20
@@ -223,13 +215,9 @@ jobs:
         run: bash scripts/ensure_vram_clear.sh rocm
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: |
-          bash scripts/ci/amd/amd_ci_install_dependency.sh
 
       - name: Run test
         timeout-minutes: 10
@@ -264,12 +252,9 @@ jobs:
         run: bash scripts/ensure_vram_clear.sh rocm
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
 
       - name: Run test
         timeout-minutes: 30
@@ -303,12 +288,9 @@ jobs:
         run: bash scripts/ensure_vram_clear.sh rocm
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi35x-20260127-preview --gpu-arch gfx950-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
 
       - name: Run test
         timeout-minutes: 30
@@ -342,12 +324,9 @@ jobs:
         run: bash scripts/ensure_vram_clear.sh rocm
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
 
       - name: Run test
         timeout-minutes: 30
@@ -382,13 +361,9 @@ jobs:
           pattern: wheel-python3.10-cuda12.9
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: |
-          bash scripts/ci/amd/amd_ci_install_dependency.sh diffusion
 
       - name: Setup kernel caches
         run: |
@@ -502,13 +477,9 @@ jobs:
           pattern: wheel-python3.10-cuda12.9
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: |
-          bash scripts/ci/amd/amd_ci_install_dependency.sh diffusion
 
       - name: Setup kernel caches
         run: |
@@ -623,12 +594,9 @@ jobs:
         run: bash scripts/ensure_vram_clear.sh rocm
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
 
       - name: Test RCCL multi-GPU communication
         timeout-minutes: 5
@@ -669,12 +637,9 @@ jobs:
         run: bash scripts/ensure_vram_clear.sh rocm
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi35x-20260127-preview --gpu-arch gfx950-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
 
       - name: Run test
         timeout-minutes: 60
@@ -708,12 +673,9 @@ jobs:
         run: bash scripts/ensure_vram_clear.sh rocm
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
 
       - name: Run test
         timeout-minutes: 30
@@ -748,12 +710,9 @@ jobs:
         run: bash scripts/ensure_vram_clear.sh rocm
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
 
       - name: Run test
         timeout-minutes: 30
@@ -787,12 +746,9 @@ jobs:
         run: bash scripts/ensure_vram_clear.sh rocm
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
 
       - name: Run test
         timeout-minutes: 30
@@ -826,12 +782,9 @@ jobs:
         run: bash scripts/ensure_vram_clear.sh rocm
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
 
       - name: Run test
         timeout-minutes: 30
@@ -865,12 +818,9 @@ jobs:
         run: bash scripts/ensure_vram_clear.sh rocm
 
       - name: Start CI container
-        run: bash scripts/ci/amd/amd_ci_start_container.sh
+        run: bash scripts/ci/amd/amd_ci_start_container.sh --custom-image rocm/sgl-dev:v0.5.8-rocm720-mi30x-20260127-preview --gpu-arch gfx942-rocm720
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
-      - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
 
       - name: Run test
         timeout-minutes: 30
