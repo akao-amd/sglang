@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gpu_arch: ['gfx942', 'gfx950']
+        gpu_arch: ['gfx942', 'gfx942-rocm720', 'gfx950', 'gfx950-rocm720']
         build_type: ['all']
     steps:
       - name: Checkout repository
@@ -59,14 +59,22 @@ jobs:
 
           if [ "${{ matrix.gpu_arch }}" = "gfx942" ]; then
             rocm_tag="rocm700-mi30x"
+            suffix=""
+          elif [ "${{ matrix.gpu_arch }}" = "gfx942-rocm720" ]; then
+            rocm_tag="rocm720-mi30x"
+            suffix="-preview"
           elif [ "${{ matrix.gpu_arch }}" = "gfx950" ]; then
             rocm_tag="rocm700-mi35x"
+            suffix=""
+          elif [ "${{ matrix.gpu_arch }}" = "gfx950-rocm720" ]; then
+            rocm_tag="rocm720-mi35x"
+            suffix="-preview"
           else
             echo "Unsupported gfx arch"
             exit 1
           fi
 
-          tag=v${version}-${rocm_tag}
+          tag=v${version}-${rocm_tag}${suffix}
 
           docker build . -f docker/rocm.Dockerfile --build-arg BUILD_TYPE=${{ matrix.build_type }} --build-arg GPU_ARCH=${{ matrix.gpu_arch }} -t rocm/sgl-dev:${tag}-${{ env.DATE }} --no-cache
           docker push rocm/sgl-dev:${tag}-${{ env.DATE }}
