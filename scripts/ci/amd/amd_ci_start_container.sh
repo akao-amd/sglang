@@ -208,6 +208,7 @@ fi
 
 echo "Launching container: ci_sglang"
 docker run -dt --user root --device=/dev/kfd ${DEVICE_FLAG} \
+  --ulimit nofile=65536:65536 \
   -v "${GITHUB_WORKSPACE:-$PWD}:/sglang-checkout" \
   $CACHE_VOLUME \
   --group-add video \

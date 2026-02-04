@@ -15,7 +15,7 @@ _is_hip = is_hip()
 if _is_hip:
     import os
 
-    os.environ["SGLANG_USE_AITER"] = "0"
+    os.environ["SGLANG_USE_AITER"] = "1"
 
 
 class TestHiddenState(CustomTestCase):
