@@ -179,6 +179,9 @@ docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache git+https://gi
 # Install cache-dit for qwen_image_t2i_cache_dit_enabled test (added in PR 16204)
 docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache cache-dit || echo "cache-dit installation failed"
 
+# Install accelerate for distributed training and inference support
+docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache accelerate || echo "accelerate installation failed"
+
 # Detect AITER version
 #############################################
 # Detect correct AITER_COMMIT for this runner
