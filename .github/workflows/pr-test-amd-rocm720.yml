@@ -13,15 +13,15 @@ on:
       - "sgl-kernel/**"
       - ".github/workflows/pr-test-amd-rocm720.yml"
       - "docker/rocm720.Dockerfile"
-  pull_request:
-    branches: [ main ]
-    paths:
-      - "python/**"
-      - "scripts/ci/**"
-      - "test/**"
-      - "sgl-kernel/**"
-      - ".github/workflows/pr-test-amd-rocm720.yml"
-      - "docker/rocm720.Dockerfile"
+#   pull_request:
+#     branches: [ main ]
+#     paths:
+#       - "python/**"
+#       - "scripts/ci/**"
+#       - "test/**"
+#       - "sgl-kernel/**"
+#       - ".github/workflows/pr-test-amd-rocm720.yml"
+#       - "docker/rocm720.Dockerfile"
   workflow_dispatch:
     inputs:
       target_stage:
