@@ -35,7 +35,7 @@ class TestMoEEvalAccuracyLarge(CustomTestCase):
         env = None
         if is_in_amd_ci():
             env = os.environ.copy()
-            env["SGLANG_USE_AITER"] = "1"
+            env["SGLANG_USE_AITER"] = "0"
             env["SGLANG_USE_AITER_AR"] = "0"
             env["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
