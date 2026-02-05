@@ -1,13 +1,13 @@
 name: Nightly Test (AMD ROCm 7.2)
 
 on:
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "docker/rocm720.Dockerfile"
-      - "scripts/ci/amd/amd_ci_start_container.sh"
-      - ".github/workflows/nightly-test-amd-rocm720.yml"
+#   pull_request:
+#     branches:
+#       - main
+#     paths:
+#       - "docker/rocm720.Dockerfile"
+#       - "scripts/ci/amd/amd_ci_start_container.sh"
+#       - ".github/workflows/nightly-test-amd-rocm720.yml"
   workflow_dispatch:
     inputs:
       job_filter:

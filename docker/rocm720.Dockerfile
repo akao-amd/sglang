@@ -35,7 +35,7 @@ ENV BUILD_TRITON="1"
 ENV BUILD_LLVM="0"
 ENV BUILD_AITER_ALL="1"
 ENV BUILD_MOONCAKE="1"
-ENV AITER_COMMIT="v0.1.10.post1"
+ENV AITER_COMMIT="f252f19515e4128c168461629e60bca1478ea974"
 
 # ===============================
 # Base image 950 and args
@@ -55,7 +55,7 @@ ENV BUILD_TRITON="1"
 ENV BUILD_LLVM="0"
 ENV BUILD_AITER_ALL="0"
 ENV BUILD_MOONCAKE="1"
-ENV AITER_COMMIT="v0.1.10.post1"
+ENV AITER_COMMIT="f252f19515e4128c168461629e60bca1478ea974"
 
 # ===============================
 # Chosen arch and args
@@ -65,8 +65,8 @@ FROM ${GPU_ARCH}
 ARG GPU_ARCH=gfx950
 ENV GPU_ARCH_LIST=${GPU_ARCH%-*}
 
-ARG SGL_REPO="https://github.com/sgl-project/sglang.git"
-ARG SGL_DEFAULT="main"
+ARG SGL_REPO="https://github.com/HaiShaw/sglang.git"
+ARG SGL_DEFAULT="aiter_backend_update"
 ARG SGL_BRANCH=${SGL_DEFAULT}
 
 # Version override for setuptools_scm (used in nightly builds)
@@ -337,23 +337,8 @@ RUN /bin/bash -lc 'set -euo pipefail; \
 RUN python3 -m pip install --no-cache-dir \
     py-spy \
     pre-commit \
-    tabulate
-
-# -----------------------
-# Triton
-# For ROCm 7.2, this custom build breaks pip dependency management,
-# so future `pip install` will break the ROCm stack.
-# A workaround for this is to reinstall the default triton
-# wheel with the `rocm/pytorch` image in the root directory.
-RUN if [ "$BUILD_TRITON" = "1" ]; then \
-        pip uninstall -y triton \
-     && apt install -y cmake \
-     && git clone ${TRITON_REPO} triton-custom \
-     && cd triton-custom \
-     && git checkout ${TRITON_COMMIT} \
-     && pip install -r python/requirements.txt \
-     && pip install -e .; \
-    fi
+    tabulate \
+    amdsmi
 
 # -----------------------
 # MORI (optional)
@@ -421,6 +406,22 @@ RUN /bin/bash -lc 'set -euo pipefail; \
   ldconfig; \
   echo "export PYTHONPATH=/sgl-workspace/mori:\${PYTHONPATH}" >> /etc/bash.bashrc; \
   echo "[MORI] Done."'
+
+# -----------------------
+# Triton
+# For ROCm 7.2, this custom build breaks pip dependency management,
+# so future `pip install` will break the ROCm stack.
+# A workaround for this is to reinstall the default triton
+# wheel with the `rocm/pytorch` image in the root directory.
+RUN if [ "$BUILD_TRITON" = "1" ]; then \
+        pip uninstall -y triton \
+     && apt install -y cmake \
+     && git clone ${TRITON_REPO} triton-custom \
+     && cd triton-custom \
+     && git checkout ${TRITON_COMMIT} \
+     && pip install -r python/requirements.txt \
+     && pip install -e .; \
+    fi
 
 # -----------------------
 # Performance environment variable.
