@@ -35,7 +35,7 @@ ENV BUILD_TRITON="1"
 ENV BUILD_LLVM="0"
 ENV BUILD_AITER_ALL="1"
 ENV BUILD_MOONCAKE="1"
-ENV AITER_COMMIT="f252f19515e4128c168461629e60bca1478ea974"
+ENV AITER_COMMIT="e6cf3d92a835fee52b819983fa18eb024cea51b3"
 
 # ===============================
 # Base image 950 and args
@@ -55,7 +55,7 @@ ENV BUILD_TRITON="1"
 ENV BUILD_LLVM="0"
 ENV BUILD_AITER_ALL="0"
 ENV BUILD_MOONCAKE="1"
-ENV AITER_COMMIT="f252f19515e4128c168461629e60bca1478ea974"
+ENV AITER_COMMIT="e6cf3d92a835fee52b819983fa18eb024cea51b3"
 
 # ===============================
 # Chosen arch and args
@@ -75,7 +75,7 @@ ARG SETUPTOOLS_SCM_PRETEND_VERSION=""
 ARG TRITON_REPO="https://github.com/triton-lang/triton.git"
 ARG TRITON_COMMIT="42270451990532c67e69d753fbd026f28fcc4840"
 
-ARG AITER_REPO="https://github.com/ROCm/aiter.git"
+ARG AITER_REPO="https://github.com/akao-amd/aiter.git"
 
 ARG LLVM_REPO="https://github.com/jrbyrnes/llvm-project.git"
 ARG LLVM_BRANCH="MainOpSelV2"
