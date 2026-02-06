@@ -59,15 +59,14 @@ elif _is_hip:
             raise ImportError("aiter is required when SGLANG_USE_AITER is set to True")
     # Note: vllm_ops is not needed for HIP when _use_aiter=False
     # because the code uses moe_sum_reduce_triton as fallback (line 619)
-
-# Try to import vllm_ops for non-CUDA/HIP platforms
-_has_vllm_ops = False
-if not _is_cuda and not _is_hip:
-    try:
-        from vllm import _custom_ops as vllm_ops
 elif _is_xpu:
     from sgl_kernel import moe_sum_reduce, silu_and_mul
 
+# Try to import vllm_ops for non-CUDA/HIP/XPU platforms
+_has_vllm_ops = False
+if not _is_cuda and not _is_hip and not _is_xpu:
+    try:
+        from vllm import _custom_ops as vllm_ops
         _has_vllm_ops = True
     except ImportError:
         # Fallback: vllm not available, will use native PyTorch implementations
