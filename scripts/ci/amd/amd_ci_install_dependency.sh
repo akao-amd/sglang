@@ -2,6 +2,27 @@
 set -euo pipefail
 HOSTNAME_VALUE=$(hostname)
 GPU_ARCH="mi30x"   # default
+SKIP_TT_DEPS=""
+SKIP_SGLANG_BUILD=""
+SKIP_AITER_BUILD=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --skip-aiter-build) SKIP_AITER_BUILD="1"; shift;;
+    --skip-sglang-build) SKIP_SGLANG_BUILD="1"; shift;;
+    --skip-test-time-deps) SKIP_TT_DEPS="1"; shift;;
+    -h|--help)
+      echo "Usage: $0 [OPTIONS] [OPTIONAL_DEPS]"
+      echo "Options:"
+      echo "  --skip-sglang-build         Don't build checkout sglang, use what was shipped with the image"
+      echo "  --skip-aiter-build          Don't build aiter, use what was shipped with the image"
+      echo "  --skip-test-time-deps       Don't build miscellaneous dependencies"
+      exit 0
+      ;;
+    *) break ;;
+  esac
+done
+
 OPTIONAL_DEPS="${1:-}"
 
 # Build python extras
@@ -36,16 +57,6 @@ if [[ "$TRITON_VERSION" == 3.6.* ]]; then
     echo "Triton temporarily downgraded to 3.5.1"
 fi
 # === END FIX ===
-
-docker exec ci_sglang pip uninstall sgl-kernel -y || true
-docker exec ci_sglang pip uninstall sglang -y || true
-# Clear Python cache to ensure latest code is used
-docker exec ci_sglang find /opt/venv -name "*.pyc" -delete || true
-docker exec ci_sglang find /opt/venv -name "__pycache__" -type d -exec rm -rf {} + || true
-# Also clear cache in sglang-checkout
-docker exec ci_sglang find /sglang-checkout -name "*.pyc" -delete || true
-docker exec ci_sglang find /sglang-checkout -name "__pycache__" -type d -exec rm -rf {} + || true
-docker exec -w /sglang-checkout/sgl-kernel ci_sglang bash -c "rm -f pyproject.toml && mv pyproject_rocm.toml pyproject.toml && python3 setup_rocm.py install"
 
 # Helper function to install with retries and fallback PyPI mirror
 install_with_retry() {
@@ -107,80 +118,98 @@ git_clone_with_retry() {
   return 1
 }
 
+# Install checkout sglang
+if [ -n "$SKIP_SGLANG_BUILD" ]; then
+  echo "Didn't build checkout SGLang"
+else
+  docker exec ci_sglang pip uninstall sgl-kernel -y || true
+  docker exec ci_sglang pip uninstall sglang -y || true
+  # Clear Python cache to ensure latest code is used
+  docker exec ci_sglang find /opt/venv -name "*.pyc" -delete || true
+  docker exec ci_sglang find /opt/venv -name "__pycache__" -type d -exec rm -rf {} + || true
+  # Also clear cache in sglang-checkout
+  docker exec ci_sglang find /sglang-checkout -name "*.pyc" -delete || true
+  docker exec ci_sglang find /sglang-checkout -name "__pycache__" -type d -exec rm -rf {} + || true
+  docker exec -w /sglang-checkout/sgl-kernel ci_sglang bash -c "rm -f pyproject.toml && mv pyproject_rocm.toml pyproject.toml && python3 setup_rocm.py install"
 
+  docker exec ci_sglang bash -c 'rm -rf python/pyproject.toml && mv python/pyproject_other.toml python/pyproject.toml'
+  install_with_retry docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache -e "python[${EXTRAS}]"
+fi
 
-case "${GPU_ARCH}" in
-  mi35x)
-    echo "Runner uses ${GPU_ARCH}; will fetch mi35x image."
-    docker exec ci_sglang rm -rf python/pyproject.toml && mv python/pyproject_other.toml python/pyproject.toml
-    # Follow the same dependency installation flow as mi30x/mi300/mi325.
-    install_with_retry docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache -e "python[${EXTRAS}]"
-    # For lmms_evals evaluating MMMU
-    docker exec -w / ci_sglang git clone --branch v0.4.1 --depth 1 https://github.com/EvolvingLMMs-Lab/lmms-eval.git
-    install_with_retry docker exec -w /lmms-eval ci_sglang pip install --cache-dir=/sgl-data/pip-cache -e .
-    ;;
-  mi30x|mi300|mi325)
-    echo "Runner uses ${GPU_ARCH}; will fetch mi30x image."
-    docker exec ci_sglang rm -rf python/pyproject.toml && mv python/pyproject_other.toml python/pyproject.toml
-    install_with_retry docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache -e "python[${EXTRAS}]"
-    # For lmms_evals evaluating MMMU
-    docker exec -w / ci_sglang git clone --branch v0.4.1 --depth 1 https://github.com/EvolvingLMMs-Lab/lmms-eval.git
-    install_with_retry docker exec -w /lmms-eval ci_sglang pip install --cache-dir=/sgl-data/pip-cache -e .
-    ;;
-  *)
-    echo "Runner architecture '${GPU_ARCH}' unrecognised;" >&2
-    ;;
-esac
-
-#docker exec -w / ci_sglang git clone https://github.com/merrymercy/human-eval.git
-git_clone_with_retry https://github.com/merrymercy/human-eval.git human-eval
-docker cp human-eval ci_sglang:/
-# Ensure setuptools is installed (human-eval's setup.py imports pkg_resources)
-docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache setuptools
-install_with_retry docker exec -w /human-eval ci_sglang pip install --cache-dir=/sgl-data/pip-cache --no-build-isolation -e .
-
-docker exec -w / ci_sglang mkdir -p /dummy-grok
-# Create dummy grok config inline (bypasses Azure blob storage which may have auth issues)
-mkdir -p dummy-grok
-cat > dummy-grok/config.json << 'EOF'
-{
-  "architectures": [
-    "Grok1ModelForCausalLM"
-  ],
-  "embedding_multiplier_scale": 78.38367176906169,
-  "output_multiplier_scale": 0.5773502691896257,
-  "vocab_size": 131072,
-  "hidden_size": 6144,
-  "intermediate_size": 32768,
-  "max_position_embeddings": 8192,
-  "num_experts_per_tok": 2,
-  "num_local_experts": 8,
-  "num_attention_heads": 48,
-  "num_hidden_layers": 64,
-  "num_key_value_heads": 8,
-  "head_dim": 128,
-  "rms_norm_eps": 1e-05,
-  "rope_theta": 10000.0,
-  "model_type": "mixtral",
-  "torch_dtype": "bfloat16"
+resume_triton() {
+  # === Restore triton to original version if it was temporarily downgraded ===
+  if [[ "$TRITON_NEEDS_RESTORE" == "true" ]]; then
+      echo "Restoring triton to original version..."
+      # Triton 3.6.x is an editable install from /sgl-workspace/triton-custom (pip install -e .)
+      if docker exec ci_sglang test -d /sgl-workspace/triton-custom; then
+          docker exec -w /sgl-workspace/triton-custom ci_sglang pip install --cache-dir=/sgl-data/pip-cache -e .
+          echo "Triton restored from /sgl-workspace/triton-custom"
+      else
+          echo "Warning: /sgl-workspace/triton-custom not found, triton remains at 3.5.1"
+      fi
+  fi
 }
+
+if [[ -n "${SKIP_TT_DEPS}" ]]; then
+  echo "Didn't build lmms_eval, human-eval, and others"
+else
+  # For lmms_evals evaluating MMMU
+  docker exec -w / ci_sglang git clone --branch v0.4.1 --depth 1 https://github.com/EvolvingLMMs-Lab/lmms-eval.git
+  install_with_retry docker exec -w /lmms-eval ci_sglang pip install --cache-dir=/sgl-data/pip-cache -e .
+
+  #docker exec -w / ci_sglang git clone https://github.com/merrymercy/human-eval.git
+  git_clone_with_retry https://github.com/merrymercy/human-eval.git human-eval
+  docker cp human-eval ci_sglang:/
+  install_with_retry docker exec -w /human-eval ci_sglang pip install --cache-dir=/sgl-data/pip-cache -e .
+
+  docker exec -w / ci_sglang mkdir -p /dummy-grok
+  # Create dummy grok config inline (bypasses Azure blob storage which may have auth issues)
+  mkdir -p dummy-grok
+  cat > dummy-grok/config.json << 'EOF'
+  {
+    "architectures": [
+      "Grok1ModelForCausalLM"
+    ],
+    "embedding_multiplier_scale": 78.38367176906169,
+    "output_multiplier_scale": 0.5773502691896257,
+    "vocab_size": 131072,
+    "hidden_size": 6144,
+    "intermediate_size": 32768,
+    "max_position_embeddings": 8192,
+    "num_experts_per_tok": 2,
+    "num_local_experts": 8,
+    "num_attention_heads": 48,
+    "num_hidden_layers": 64,
+    "num_key_value_heads": 8,
+    "head_dim": 128,
+    "rms_norm_eps": 1e-05,
+    "rope_theta": 10000.0,
+    "model_type": "mixtral",
+    "torch_dtype": "bfloat16"
+  }
 EOF
-# docker exec -w / ci_sglang mkdir -p /dummy-grok
-# mkdir -p dummy-grok && wget https://sharkpublic.blob.core.windows.net/sharkpublic/sglang/dummy_grok.json -O dummy-grok/config.json
-# docker cp ./dummy-grok ci_sglang:/
+  # docker exec -w / ci_sglang mkdir -p /dummy-grok
+  # mkdir -p dummy-grok && wget https://sharkpublic.blob.core.windows.net/sharkpublic/sglang/dummy_grok.json -O dummy-grok/config.json
+  # docker cp ./dummy-grok ci_sglang:/
 
-docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache huggingface_hub[hf_xet]
-docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache pytest
+  docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache huggingface_hub[hf_xet]
+  docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache pytest
 
-# Install tvm-ffi for JIT kernel support (QK-norm, etc.)
-echo "Installing tvm-ffi for JIT kernel support..."
-docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache git+https://github.com/apache/tvm-ffi.git || echo "tvm-ffi installation failed, JIT kernels will use fallback"
+  # Install tvm-ffi for JIT kernel support (QK-norm, etc.)
+  echo "Installing tvm-ffi for JIT kernel support..."
+  docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache git+https://github.com/apache/tvm-ffi.git || echo "tvm-ffi installation failed, JIT kernels will use fallback"
 
-# Install cache-dit for qwen_image_t2i_cache_dit_enabled test (added in PR 16204)
-docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache cache-dit || echo "cache-dit installation failed"
+  # Install cache-dit for qwen_image_t2i_cache_dit_enabled test (added in PR 16204)
+  docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache cache-dit || echo "cache-dit installation failed"
 
-# Install accelerate for distributed training and inference support
-docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache accelerate || echo "accelerate installation failed"
+  # Install accelerate for distributed training and inference support
+  docker exec ci_sglang pip install --cache-dir=/sgl-data/pip-cache accelerate || echo "accelerate installation failed"
+fi
+
+if [[ -n "${SKIP_AITER_BUILD}" ]]; then
+  resume_triton
+  exit 0
+fi
 
 # Detect AITER version
 #############################################
@@ -300,14 +329,4 @@ docker exec ci_sglang ls -la /sgl-workspace/aiter/aiter/jit/ 2>/dev/null || echo
 echo "Warming up AITER JIT kernels..."
 docker exec -e SGLANG_USE_AITER=1 ci_sglang python3 /sglang-checkout/scripts/ci/amd/amd_ci_warmup_aiter.py || echo "AITER warmup completed (some kernels may not be available)"
 
-# === Restore triton to original version if it was temporarily downgraded ===
-if [[ "$TRITON_NEEDS_RESTORE" == "true" ]]; then
-    echo "Restoring triton to original version..."
-    # Triton 3.6.x is an editable install from /sgl-workspace/triton-custom (pip install -e .)
-    if docker exec ci_sglang test -d /sgl-workspace/triton-custom; then
-        docker exec -w /sgl-workspace/triton-custom ci_sglang pip install --cache-dir=/sgl-data/pip-cache -e .
-        echo "Triton restored from /sgl-workspace/triton-custom"
-    else
-        echo "Warning: /sgl-workspace/triton-custom not found, triton remains at 3.5.1"
-    fi
-fi
+resume_triton

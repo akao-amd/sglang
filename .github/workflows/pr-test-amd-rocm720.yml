@@ -138,7 +138,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          bash scripts/ci/amd/amd_ci_install_dependency.sh
+          bash scripts/ci/amd/amd_ci_install_dependency.sh --skip-aiter-build
 
       - name: Run test
         timeout-minutes: 14
@@ -185,7 +185,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          bash scripts/ci/amd/amd_ci_install_dependency.sh
+          bash scripts/ci/amd/amd_ci_install_dependency.sh --skip-aiter-build
 
       - name: Run test
         timeout-minutes: 20
@@ -228,7 +228,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          bash scripts/ci/amd/amd_ci_install_dependency.sh
+          bash scripts/ci/amd/amd_ci_install_dependency.sh --skip-aiter-build
 
       - name: Run test
         timeout-minutes: 10
@@ -268,7 +268,7 @@ jobs:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
       - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
+        run: bash scripts/ci/amd/amd_ci_install_dependency.sh --skip-aiter-build
 
       - name: Run test
         timeout-minutes: 30
@@ -307,7 +307,7 @@ jobs:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
       - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
+        run: bash scripts/ci/amd/amd_ci_install_dependency.sh --skip-aiter-build
 
       - name: Run test
         timeout-minutes: 30
@@ -347,7 +347,7 @@ jobs:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
       - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
+        run: bash scripts/ci/amd/amd_ci_install_dependency.sh --skip-aiter-build
 
       - name: Run test
         timeout-minutes: 30
@@ -387,7 +387,7 @@ jobs:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
       - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
+        run: bash scripts/ci/amd/amd_ci_install_dependency.sh --skip-aiter-build
 
       - name: Run test
         timeout-minutes: 30
@@ -428,7 +428,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          bash scripts/ci/amd/amd_ci_install_dependency.sh diffusion
+          bash scripts/ci/amd/amd_ci_install_dependency.sh --skip-aiter-build diffusion
 
       - name: Setup kernel caches
         run: |
@@ -548,7 +548,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          bash scripts/ci/amd/amd_ci_install_dependency.sh diffusion
+          bash scripts/ci/amd/amd_ci_install_dependency.sh --skip-aiter-build diffusion
 
       - name: Setup kernel caches
         run: |
@@ -668,7 +668,7 @@ jobs:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
       - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
+        run: bash scripts/ci/amd/amd_ci_install_dependency.sh --skip-aiter-build
 
       - name: Test RCCL multi-GPU communication
         timeout-minutes: 5
@@ -714,7 +714,7 @@ jobs:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
       - name: Install dependencies
-        run: bash scripts/ci/amd/amd_ci_install_dependency.sh
+        run: bash scripts/ci/amd/amd_ci_install_dependency.sh --skip-aiter-build
 
       - name: Run test
         timeout-minutes: 60
