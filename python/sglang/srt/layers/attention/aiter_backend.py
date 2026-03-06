@@ -230,6 +230,17 @@ class AiterAttnBackend(AttentionBackend):
                 fast_mode = False
                 intra_batch_mode = False
 
+            # Sub-16 head case: models like Kimi-K2-Instruct-0905 (64 heads) with high TP
+            # (e.g. TP=8 → 8 heads/GPU, TP=16 → 4 heads/GPU) produce nhead < 16.
+            # The persistent kernel pads heads to 16 for metadata/tile alignment; this is
+            # handled in aiter/mla.py mla_decode_fwd. Disable fallback so persistent path runs.
+            if self.num_head < 16 and 16 % self.num_head == 0:
+                # Keep _use_mla_ps_kernel unchanged (True by default) so that
+                # the persistent path (which supports head padding to 16) is used.
+                # Ensure fast_mode and intra_batch_mode are suitable for this case.
+                fast_mode = True
+                intra_batch_mode = False
+
             self.max_split_per_batch = 32 if _use_mla_ps_kernel else None
 
             if self.num_draft_tokens is None and _use_mla_ps_kernel:
@@ -239,6 +250,10 @@ class AiterAttnBackend(AttentionBackend):
 
     def make_mla_decode_meta_data_buffer(self, max_seqlen_qo, batch_size):
         nhead = self.num_head
+        # For sub-16 head counts (e.g. 8, 4 from high-TP Kimi-K2-Instruct-0905),
+        # the ASM kernel's minimum tile is 16 heads; heads are padded to 16 in
+        # mla_decode_fwd, so metadata must also be sized for 16 heads.
+        effective_nhead = max(nhead, 16) if nhead < 16 and 16 % nhead == 0 else nhead
         dtype = self.kv_cache_dtype
 
         if self.enable_dp_attention:
@@ -259,7 +274,7 @@ class AiterAttnBackend(AttentionBackend):
         ) = get_mla_metadata_info_v1(
             batch_size,
             max_seqlen_qo,
-            nhead,
+            effective_nhead,
             dtype,
             dtype,
             is_sparse=False,
@@ -320,12 +335,19 @@ class AiterAttnBackend(AttentionBackend):
         nhead_kv = 1
         page_size = self.page_size
         dtype = self.kv_cache_dtype
+        # For sub-16 head counts, metadata must be built for the padded (effective) nhead=16
+        # to match the padded buffers used by mla_decode_fwd.
+        effective_num_head = (
+            max(self.num_head, 16)
+            if self.num_head < 16 and 16 % self.num_head == 0
+            else self.num_head
+        )
 
         meta = get_mla_metadata_v1(
             qo_indptr,
             kv_indptr,
             kv_last_page_len,
-            self.num_head // nhead_kv,
+            effective_num_head // nhead_kv,
             nhead_kv,
             False,
             work_metadata,
