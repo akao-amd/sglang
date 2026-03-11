@@ -180,11 +180,12 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Self-triggered per-layer profiling.
-# Every DeepseekV2DecoderLayer.forward() call wraps attn + mlp in its own
-# torch.profiler.profile and exports a chrome trace — no curl needed.
+# Each layer profiles itself exactly once on its first forward() call that is
+# NOT inside a CUDA/HIP graph capture (capture raises on device.synchronize).
 # Set SGLANG_LAYER_PROF_OUTPUT_DIR to control where traces land.
 # ---------------------------------------------------------------------------
 _LAYER_PROF_OUTPUT_DIR = os.getenv("SGLANG_LAYER_PROF_OUTPUT_DIR", "/tmp/sglang_layer_profile")
+_layer_prof_done: set = set()  # layer_ids whose trace has already been saved
 
 
 class DeepseekV2MLP(nn.Module):
@@ -1652,17 +1653,25 @@ class DeepseekV2DecoderLayer(nn.Module):
         )
 
         # ------------------------------------------------------------------
-        # Self-triggered per-layer profiling — fires on every forward() call
-        # for every layer.  No curl / client-side trigger required.
+        # Self-triggered per-layer profiling.
+        # Conditions to profile this layer:
+        #   1. not yet captured a trace for this layer_id
+        #   2. not inside a CUDA/HIP graph capture (synchronize() would raise)
         # ------------------------------------------------------------------
-        _self_prof = torch.profiler.profile(
-            activities=[
-                torch.profiler.ProfilerActivity.CPU,
-                torch.profiler.ProfilerActivity.CUDA,
-            ],
-            with_stack=True,
+        _do_prof = (
+            self.layer_id not in _layer_prof_done
+            and not torch.cuda.is_current_stream_capturing()
         )
-        _self_prof.__enter__()
+        _self_prof: Optional[torch.profiler.profile] = None
+        if _do_prof:
+            _self_prof = torch.profiler.profile(
+                activities=[
+                    torch.profiler.ProfilerActivity.CPU,
+                    torch.profiler.ProfilerActivity.CUDA,
+                ],
+                with_stack=True,
+            )
+            _self_prof.__enter__()
 
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states,
@@ -1671,7 +1680,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             quant_format,
         )
 
-        with torch.profiler.record_function(f"layer_{self.layer_id}/attn"):
+        with torch.profiler.record_function(f"layer_{self.layer_id}/attn") if _do_prof else nullcontext():
             hidden_states = self.self_attn(
                 positions=positions,
                 hidden_states=hidden_states,
@@ -1699,7 +1708,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         if isinstance(self.mlp, DeepseekV2MLP):
             gemm_output_zero_allocator = None
 
-        with torch.profiler.record_function(f"layer_{self.layer_id}/mlp"):
+        with torch.profiler.record_function(f"layer_{self.layer_id}/mlp") if _do_prof else nullcontext():
             hidden_states = self.mlp(
                 hidden_states,
                 forward_batch,
@@ -1708,19 +1717,21 @@ class DeepseekV2DecoderLayer(nn.Module):
                 gemm_output_zero_allocator,
             )
 
-        _self_prof.__exit__(None, None, None)
-        gpu_idx = torch.cuda.current_device()
-        os.makedirs(_LAYER_PROF_OUTPUT_DIR, exist_ok=True)
-        trace_path = os.path.join(
-            _LAYER_PROF_OUTPUT_DIR,
-            f"layer_{self.layer_id}-GPU-{gpu_idx}.trace.json.gz",
-        )
-        _self_prof.export_chrome_trace(trace_path)
-        logger.info(
-            "Per-layer profile for layer %d saved to %s",
-            self.layer_id,
-            trace_path,
-        )
+        if _do_prof:
+            _self_prof.__exit__(None, None, None)
+            gpu_idx = torch.cuda.current_device()
+            os.makedirs(_LAYER_PROF_OUTPUT_DIR, exist_ok=True)
+            trace_path = os.path.join(
+                _LAYER_PROF_OUTPUT_DIR,
+                f"layer_{self.layer_id}-GPU-{gpu_idx}.trace.json.gz",
+            )
+            _self_prof.export_chrome_trace(trace_path)
+            _layer_prof_done.add(self.layer_id)
+            logger.info(
+                "Per-layer profile for layer %d saved to %s",
+                self.layer_id,
+                trace_path,
+            )
 
         if not self.nsa_enable_prefill_cp and should_allreduce_fusion:
             hidden_states._sglang_needs_allreduce_fusion = True
