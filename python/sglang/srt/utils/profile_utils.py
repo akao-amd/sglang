@@ -1,3 +1,5 @@
+import gzip
+import json
 import logging
 import os
 import time
@@ -25,6 +27,117 @@ if _is_npu:
     torch_npu._apply_patches(patches)
 
 logger = logging.getLogger(__name__)
+
+
+def _annotate_trace_with_cuda_graph_attribution(trace_path: str, output_dir: str):
+    """Annotate Chrome trace with CUDA graph kernel attribution.
+
+    Looks for cuda_graph_kernel_attribution.json in the current directory and
+    annotates kernel events in the trace with their originating CPU operations.
+    """
+    # Look for attribution file in common locations
+    attribution_paths = [
+        "cuda_graph_kernel_attribution.json",  # CWD
+        os.path.join(output_dir, "cuda_graph_kernel_attribution.json"),  # Output dir
+        os.path.join(os.getcwd(), "cuda_graph_kernel_attribution.json"),  # Explicit CWD
+    ]
+
+    attribution_data = None
+    attribution_file = None
+    for path in attribution_paths:
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    attribution_data = json.load(f)
+                attribution_file = path
+                break
+            except Exception as e:
+                logger.debug(f"Failed to load attribution from {path}: {e}")
+
+    if attribution_data is None:
+        logger.debug(
+            "No CUDA graph attribution file found. "
+            "Skipping trace annotation. "
+            "Use --enable-cuda-graph-attribution to generate attribution data."
+        )
+        return
+
+    kernel_map = attribution_data.get("kernel_to_cpu_op", {})
+    if not kernel_map:
+        logger.debug("Attribution file found but contains no kernel mappings")
+        return
+
+    # Load trace (handle gzip)
+    is_gzipped = trace_path.endswith('.gz')
+    if is_gzipped:
+        with gzip.open(trace_path, 'rt') as f:
+            trace = json.load(f)
+    else:
+        with open(trace_path) as f:
+            trace = json.load(f)
+
+    # Annotate kernel events
+    annotated_count = 0
+    for event in trace.get("traceEvents", []):
+        # Look for GPU kernel events
+        if event.get("cat") == "kernel" or (
+            event.get("ph") == "X" and "name" in event
+        ):
+            kernel_name = event["name"]
+            if kernel_name in kernel_map:
+                attributions = kernel_map[kernel_name]
+                # Get unique CPU ops for this kernel
+                cpu_ops = list(set(attr["cpu_op"] for attr in attributions))
+                modules = list(
+                    set(
+                        attr.get("module", "")
+                        for attr in attributions
+                        if attr.get("module")
+                    )
+                )
+
+                # Annotate event name with CPU op
+                if cpu_ops:
+                    op_suffix = ", ".join(cpu_ops[:2])  # Limit to first 2 ops
+                    if len(cpu_ops) > 2:
+                        op_suffix += f", +{len(cpu_ops)-2} more"
+                    event["name"] = f"{kernel_name} [{op_suffix}]"
+
+                # Add detailed attribution as metadata
+                event["args"] = event.get("args", {})
+                event["args"]["cuda_graph_attribution"] = {
+                    "cpu_ops": cpu_ops,
+                    "modules": modules,
+                    "source": os.path.basename(attribution_file),
+                }
+                annotated_count += 1
+
+    # Add metadata to trace
+    if "traceEvents" in trace:
+        trace["traceEvents"].append({
+            "name": "cuda_graph_attribution_metadata",
+            "ph": "M",
+            "pid": 0,
+            "tid": 0,
+            "args": {
+                "attribution_file": os.path.basename(attribution_file),
+                "kernels_annotated": annotated_count,
+                "total_unique_kernels": len(kernel_map),
+            },
+        })
+
+    # Save annotated trace
+    if is_gzipped:
+        with gzip.open(trace_path, 'wt') as f:
+            json.dump(trace, f)
+    else:
+        with open(trace_path, 'w') as f:
+            json.dump(trace, f)
+
+    logger.info(
+        f"Annotated {annotated_count} kernel events in trace with CUDA graph attribution "
+        f"(from {os.path.basename(attribution_file)})"
+    )
 
 
 class ProfileManager:
@@ -306,9 +419,15 @@ class _ProfilerTorch(_ProfilerConcreteBase):
                 + ".trace.json.gz"
             )
 
-            self.torch_profiler.export_chrome_trace(
-                os.path.join(self.output_dir, filename)
-            )
+            trace_path = os.path.join(self.output_dir, filename)
+            self.torch_profiler.export_chrome_trace(trace_path)
+
+            # Post-process: annotate with CUDA graph attribution if available
+            try:
+                _annotate_trace_with_cuda_graph_attribution(trace_path, self.output_dir)
+            except Exception as e:
+                logger.warning(f"Failed to annotate trace with CUDA graph attribution: {e}")
+
         torch.distributed.barrier(self.cpu_group)
 
         # TODO: migrate `_merge_profile_traces`

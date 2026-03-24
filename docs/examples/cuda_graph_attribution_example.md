@@ -14,9 +14,10 @@ When profiling SGLang serving with `--profile`, decode phase uses CUDA graphs wh
 The `--enable-cuda-graph-attribution` flag:
 1. Records kernel → CPU op mapping during graph **capture** (at server init)
 2. Exports the mapping to `cuda_graph_kernel_attribution.json`
-3. Adds profiler markers during graph **replay** for better trace readability
+3. **Automatically annotates** profiler traces with CPU op information
+4. Adds profiler markers during graph **replay** for better trace readability
 
-## Usage
+## Quick Start (3 Steps)
 
 ### Step 1: Launch server with attribution enabled
 
@@ -31,7 +32,7 @@ During initialization, you'll see:
 INFO: CUDA graph kernel attribution map saved to cuda_graph_kernel_attribution.json (1234 unique kernels)
 ```
 
-### Step 2: Run profiling
+### Step 2: Run profiling with bench_serving
 
 ```bash
 python -m sglang.bench_serving \
@@ -40,7 +41,55 @@ python -m sglang.bench_serving \
     --profile
 ```
 
-### Step 3: Analyze the attribution
+**That's it!** The profiler will automatically:
+- Find the attribution JSON file
+- Annotate kernel events with their CPU operations
+- Add attribution metadata to the trace
+
+You'll see:
+```
+INFO: Annotated 1234 kernel events in trace with CUDA graph attribution
+```
+
+### Step 3: Analyze the results
+
+**Option A: View in Chrome Trace Viewer**
+
+Open the trace file in `chrome://tracing`. Kernel events will now show their CPU operations:
+```
+ampere_fp16_s1688gemm_fp16_128x128 [aten::linear]
+fmha_cutlassF_f16_aligned_64x128 [aten::scaled_dot_product_attention]
+```
+
+**Option B: Generate a summary report**
+
+```bash
+python -m sglang.srt.utils.analyze_cuda_graph_profile \
+    --trace /tmp/profile-TP-0-decode.trace.json.gz
+```
+
+Output:
+```
+============================================================================
+CUDA Graph Profiling Report with Attribution
+============================================================================
+
+Server Configuration:
+  Model: meta-llama/Llama-3.1-8B
+  TP Size: 1
+  Captured Batch Sizes: [1, 2, 4, 8, 16, 32]
+
+Top CPU Operations by Total Time
+----------------------------------------------------------------------------
+CPU Operation                                      Total Time    Count   Avg Time
+----------------------------------------------------------------------------
+aten::linear                                        1234.56 ms    4567    270.23 us
+aten::scaled_dot_product_attention                   890.12 ms    1234    721.45 us
+aten::mul                                            123.45 ms    8901     13.87 us
+...
+```
+
+## Detailed: What Gets Captured
 
 The `cuda_graph_kernel_attribution.json` file contains:
 
@@ -126,40 +175,26 @@ for kernel, infos in attribution["kernel_to_cpu_op"].items():
 - Not needed for: Prefill/extend phases (they already show full attribution)
 - Best used with: `--enable-profile-cuda-graph` for complete capture-time profiling
 
-## Advanced: Integration with External Tools
+## How It Works Behind the Scenes
 
-The JSON format is designed for easy integration with profiling analysis tools:
+When you enable `--enable-cuda-graph-attribution`:
 
-```python
-# Example: Annotate Chrome trace with attribution
-import json
+1. **During server initialization** (capture phase):
+   - Profiler runs with `with_stack=True` and `with_modules=True`
+   - Captures full call stack and module hierarchy for each operation
+   - Builds kernel → CPU op mapping from profiler events
+   - Exports to `cuda_graph_kernel_attribution.json`
 
-def annotate_chrome_trace(trace_file, attribution_file, output_file):
-    with open(trace_file) as f:
-        trace = json.load(f)
+2. **During runtime profiling** (when you run `bench_serving --profile`):
+   - Profiler automatically looks for `cuda_graph_kernel_attribution.json`
+   - Annotates each kernel event in the trace with its CPU operation
+   - Adds metadata to event args for detailed inspection
+   - Saves annotated trace (no separate files needed!)
 
-    with open(attribution_file) as f:
-        attribution = json.load(f)
-
-    # Add custom metadata to kernel events
-    for event in trace["traceEvents"]:
-        if event.get("cat") == "kernel" and "name" in event:
-            kernel_name = event["name"]
-            if kernel_name in attribution["kernel_to_cpu_op"]:
-                # Add CPU op name as suffix
-                cpu_ops = [info["cpu_op"] for info in attribution["kernel_to_cpu_op"][kernel_name]]
-                event["name"] = f"{kernel_name} [{', '.join(set(cpu_ops))}]"
-
-    with open(output_file, "w") as f:
-        json.dump(trace, f)
-
-# Usage
-annotate_chrome_trace(
-    "chrome_trace.json",
-    "cuda_graph_kernel_attribution.json",
-    "annotated_trace.json"
-)
-```
+3. **When viewing traces**:
+   - Kernel names include CPU operations in brackets
+   - Event metadata includes full attribution details
+   - Chrome trace viewer shows everything inline
 
 ## Troubleshooting
 
