@@ -608,6 +608,7 @@ class ServerArgs:
     disable_cuda_graph: bool = False
     disable_cuda_graph_padding: bool = False
     enable_profile_cuda_graph: bool = False
+    enable_cuda_graph_attribution: bool = False
     enable_cudagraph_gc: bool = False
     enable_layerwise_nvtx_marker: bool = False
     enable_nccl_nvls: bool = False
@@ -5252,6 +5253,14 @@ class ServerArgs:
             "--enable-profile-cuda-graph",
             action="store_true",
             help="Enable profiling of cuda graph capture.",
+        )
+        parser.add_argument(
+            "--enable-cuda-graph-attribution",
+            action="store_true",
+            help="Enable kernel→CPU op attribution tracking for CUDA graphs. "
+            "Records mapping between GPU kernels and originating CPU operations during "
+            "graph capture for better runtime profiling analysis. Exports to JSON for "
+            "use with external profiling tools.",
         )
         parser.add_argument(
             "--enable-cudagraph-gc",

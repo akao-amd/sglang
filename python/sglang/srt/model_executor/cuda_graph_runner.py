@@ -530,6 +530,11 @@ class CudaGraphRunner:
         self.enable_profile_cuda_graph = (
             model_runner.server_args.enable_profile_cuda_graph
         )
+        self.enable_cuda_graph_attribution = (
+            model_runner.server_args.enable_cuda_graph_attribution
+        )
+        # Storage for kernel → CPU op attribution mapping
+        self.kernel_attribution_map = {}
         self.tp_size = model_runner.server_args.tp_size
         self.dp_size = model_runner.server_args.dp_size
         self.pp_size = model_runner.server_args.pp_size
@@ -728,6 +733,8 @@ class CudaGraphRunner:
         profile_context = profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
             record_shapes=True,
+            with_stack=self.enable_cuda_graph_attribution,
+            with_modules=self.enable_cuda_graph_attribution,
         )
         torch.cuda.memory._record_memory_history()
         return profile_context
@@ -747,6 +754,79 @@ class CudaGraphRunner:
             + "\n\nMemory Usage is saved to cuda_graph_runner_memory_usage.pickle\n"
         )
         logger.info(log_message)
+
+    def _build_kernel_attribution_map(self, prof_context):
+        """Build kernel → CPU op attribution map from profiling context.
+
+        This records the mapping between GPU kernels and their originating CPU
+        operations during CUDA graph capture. The mapping can be used later to
+        understand what each kernel was doing during runtime profiling of graph replay.
+        """
+        import json
+
+        attribution_data = {
+            "metadata": {
+                "capture_bs": self.capture_bs,
+                "num_tokens_per_bs": self.num_tokens_per_bs,
+                "model": self.model_runner.server_args.model_path,
+                "tp_size": self.tp_size,
+                "dp_size": self.dp_size,
+            },
+            "kernel_to_cpu_op": {},
+        }
+
+        # Extract kernel → CPU op mapping from profiler events
+        for evt in prof_context.events():
+            # Look for named CPU operations (layers, attention, MLP, etc.)
+            if evt.device_type == torch.profiler.DeviceType.CPU and evt.cuda_time_total > 0:
+                cpu_op_name = evt.name
+                # Skip generic names that aren't informative
+                if cpu_op_name in ["", "ProfilerStep", "Optimizer.step", "Optimizer.zero_grad"]:
+                    continue
+
+                # Traverse children to find CUDA kernels
+                for child in evt.cpu_children:
+                    if child.device_type == torch.profiler.DeviceType.CUDA:
+                        kernel_name = child.name
+                        # Store attribution with metadata
+                        if kernel_name not in attribution_data["kernel_to_cpu_op"]:
+                            attribution_data["kernel_to_cpu_op"][kernel_name] = []
+
+                        attribution_info = {
+                            "cpu_op": cpu_op_name,
+                            "cuda_time_us": child.cuda_time_total,
+                            "cpu_time_us": child.cpu_time_total,
+                        }
+
+                        # Add stack trace if available
+                        if hasattr(child, "stack") and child.stack:
+                            stack_summary = []
+                            for frame in child.stack[:5]:  # Top 5 frames
+                                if hasattr(frame, "filename") and hasattr(frame, "line"):
+                                    stack_summary.append(f"{frame.filename}:{frame.line}")
+                            if stack_summary:
+                                attribution_info["stack_trace"] = stack_summary
+
+                        # Add module hierarchy if available
+                        if hasattr(evt, "module_hierarchy") and evt.module_hierarchy:
+                            attribution_info["module"] = evt.module_hierarchy
+
+                        attribution_data["kernel_to_cpu_op"][kernel_name].append(attribution_info)
+
+        # Store in instance variable
+        self.kernel_attribution_map = attribution_data
+
+        # Export to JSON file
+        output_path = "cuda_graph_kernel_attribution.json"
+        try:
+            with open(output_path, "w") as f:
+                json.dump(attribution_data, f, indent=2)
+            logger.info(
+                f"CUDA graph kernel attribution map saved to {output_path} "
+                f"({len(attribution_data['kernel_to_cpu_op'])} unique kernels)"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to export kernel attribution map: {e}")
 
     def capture(self) -> None:
         profile_context = empty_context()
@@ -810,6 +890,9 @@ class CudaGraphRunner:
 
         if self.enable_profile_cuda_graph:
             self._post_process_after_profile(prof)
+
+        if self.enable_cuda_graph_attribution:
+            self._build_kernel_attribution_map(prof)
 
     def _capture_graph(self, graph, pool, stream, run_once_fn):
         memory_saver_adapter = TorchMemorySaverAdapter.create(
@@ -1150,7 +1233,15 @@ class CudaGraphRunner:
             graph_key = f"{get_current_stream_idx()}_{self.bs}"
         else:
             graph_key = self.bs
-        self.graphs[graph_key].replay()
+
+        # Add profiler marker for attribution when enabled
+        if self.enable_cuda_graph_attribution:
+            from torch.profiler import record_function
+
+            with record_function(f"CUDA_GRAPH_REPLAY_BS{self.bs}"):
+                self.graphs[graph_key].replay()
+        else:
+            self.graphs[graph_key].replay()
         output = self.output_buffers[graph_key]
 
         if isinstance(output, LogitsProcessorOutput):
