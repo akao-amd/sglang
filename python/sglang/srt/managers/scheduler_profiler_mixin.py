@@ -117,13 +117,13 @@ class SchedulerProfilerMixin:
         if start_step:
             self.profiler_start_forward_ct = max(start_step, self.forward_ct + 1)
 
-        if num_steps:
-            if self.profile_by_stage:
-                self.profiler_prefill_ct = 0
-                self.profiler_decode_ct = 0
-                self.profiler_target_prefill_ct = num_steps
-                self.profiler_target_decode_ct = num_steps
-            elif start_step:
+        if self.profile_by_stage:
+            self.profiler_prefill_ct = 0
+            self.profiler_decode_ct = 0
+            self.profiler_target_prefill_ct = num_steps
+            self.profiler_target_decode_ct = num_steps
+        elif num_steps:
+            if start_step:
                 self.profiler_target_forward_ct = (
                     self.profiler_start_forward_ct + num_steps
                 )
