@@ -796,11 +796,17 @@ class CudaGraphRunner:
 
             attribution_info = {
                 "cpu_op": cpu_parent.name if cpu_parent is not None else "unknown",
-                "cpu_time_us": cpu_parent.cpu_time_total if cpu_parent is not None else 0,
+                "cpu_time_us": (
+                    cpu_parent.cpu_time_total if cpu_parent is not None else 0
+                ),
             }
 
             # Add stack trace if available (requires with_stack=True)
-            if cpu_parent is not None and hasattr(cpu_parent, "stack") and cpu_parent.stack:
+            if (
+                cpu_parent is not None
+                and hasattr(cpu_parent, "stack")
+                and cpu_parent.stack
+            ):
                 stack_summary = []
                 for frame in cpu_parent.stack[:5]:
                     if hasattr(frame, "filename") and hasattr(frame, "line"):
@@ -809,7 +815,11 @@ class CudaGraphRunner:
                     attribution_info["stack_trace"] = stack_summary
 
             # Add module hierarchy if available (requires with_modules=True)
-            if cpu_parent is not None and hasattr(cpu_parent, "module_hierarchy") and cpu_parent.module_hierarchy:
+            if (
+                cpu_parent is not None
+                and hasattr(cpu_parent, "module_hierarchy")
+                and cpu_parent.module_hierarchy
+            ):
                 attribution_info["module"] = cpu_parent.module_hierarchy
 
             attribution_data["kernel_to_cpu_op"][kernel_name].append(attribution_info)
@@ -831,7 +841,7 @@ class CudaGraphRunner:
 
     def capture(self) -> None:
         profile_context = empty_context()
-        if self.enable_profile_cuda_graph:
+        if self.enable_profile_cuda_graph or self.enable_cuda_graph_attribution:
             profile_context = self._init_profile_context_and_memory_record()
 
         def _capture_one_stream(stream_idx: Optional[int] = None):
