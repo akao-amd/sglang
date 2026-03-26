@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import tqdm
-from torch.profiler import ProfilerActivity, profile
+from torch.profiler import DeviceType, ProfilerActivity, profile
 
 from sglang.srt.batch_overlap.two_batch_overlap import TboCudaGraphRunnerPlugin
 from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH
@@ -775,43 +775,44 @@ class CudaGraphRunner:
             "kernel_to_cpu_op": {},
         }
 
-        # Extract kernel → CPU op mapping from profiler events
+        # Extract kernel → CPU op mapping from profiler events.
+        # CUDA kernel events appear as top-level events with device_type==CUDA;
+        # their .cpu_parent links back to the launching CPU op. We do NOT filter
+        # by cuda_time_total because during graph capture kernels don't actually
+        # execute, so that field is always 0.
+        _skip_names = {"", "ProfilerStep", "Optimizer.step", "Optimizer.zero_grad"}
         for evt in prof_context.events():
-            # Look for named CPU operations (layers, attention, MLP, etc.)
-            if evt.device_type == torch.profiler.DeviceType.CPU and evt.cuda_time_total > 0:
-                cpu_op_name = evt.name
-                # Skip generic names that aren't informative
-                if cpu_op_name in ["", "ProfilerStep", "Optimizer.step", "Optimizer.zero_grad"]:
-                    continue
+            if evt.device_type != DeviceType.CUDA:
+                continue
 
-                # Traverse children to find CUDA kernels
-                for child in evt.cpu_children:
-                    if child.device_type == torch.profiler.DeviceType.CUDA:
-                        kernel_name = child.name
-                        # Store attribution with metadata
-                        if kernel_name not in attribution_data["kernel_to_cpu_op"]:
-                            attribution_data["kernel_to_cpu_op"][kernel_name] = []
+            kernel_name = evt.name
+            if kernel_name not in attribution_data["kernel_to_cpu_op"]:
+                attribution_data["kernel_to_cpu_op"][kernel_name] = []
 
-                        attribution_info = {
-                            "cpu_op": cpu_op_name,
-                            "cuda_time_us": child.cuda_time_total,
-                            "cpu_time_us": child.cpu_time_total,
-                        }
+            # Walk up the CPU parent chain to find the nearest named op.
+            cpu_parent = evt.cpu_parent
+            while cpu_parent is not None and cpu_parent.name in _skip_names:
+                cpu_parent = cpu_parent.cpu_parent
 
-                        # Add stack trace if available
-                        if hasattr(child, "stack") and child.stack:
-                            stack_summary = []
-                            for frame in child.stack[:5]:  # Top 5 frames
-                                if hasattr(frame, "filename") and hasattr(frame, "line"):
-                                    stack_summary.append(f"{frame.filename}:{frame.line}")
-                            if stack_summary:
-                                attribution_info["stack_trace"] = stack_summary
+            attribution_info = {
+                "cpu_op": cpu_parent.name if cpu_parent is not None else "unknown",
+                "cpu_time_us": cpu_parent.cpu_time_total if cpu_parent is not None else 0,
+            }
 
-                        # Add module hierarchy if available
-                        if hasattr(evt, "module_hierarchy") and evt.module_hierarchy:
-                            attribution_info["module"] = evt.module_hierarchy
+            # Add stack trace if available (requires with_stack=True)
+            if cpu_parent is not None and hasattr(cpu_parent, "stack") and cpu_parent.stack:
+                stack_summary = []
+                for frame in cpu_parent.stack[:5]:
+                    if hasattr(frame, "filename") and hasattr(frame, "line"):
+                        stack_summary.append(f"{frame.filename}:{frame.line}")
+                if stack_summary:
+                    attribution_info["stack_trace"] = stack_summary
 
-                        attribution_data["kernel_to_cpu_op"][kernel_name].append(attribution_info)
+            # Add module hierarchy if available (requires with_modules=True)
+            if cpu_parent is not None and hasattr(cpu_parent, "module_hierarchy") and cpu_parent.module_hierarchy:
+                attribution_info["module"] = cpu_parent.module_hierarchy
+
+            attribution_data["kernel_to_cpu_op"][kernel_name].append(attribution_info)
 
         # Store in instance variable
         self.kernel_attribution_map = attribution_data
