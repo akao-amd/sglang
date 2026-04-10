@@ -1,7 +1,7 @@
 # Adapted from: https://github.com/vllm-project/vllm/blob/0384aa7150c4c9778efca041ffd1beb3ad2bd694/vllm/model_executor/models/kimi_linear.py
 
 from collections.abc import Iterable
-from typing import Optional
+from typing import List, Optional
 
 import torch
 from torch import nn
@@ -551,6 +551,8 @@ class KimiLinearModel(nn.Module):
             config.num_attention_heads % world_size == 0
         ), "num_attention_heads must be divisible by world_size"
 
+        self.layers_to_capture = []
+
     def forward(
         self,
         input_ids: torch.Tensor | None,
@@ -577,9 +579,12 @@ class KimiLinearModel(nn.Module):
             dtype=torch.float32,
             device=device,
         )
-        # TODO: capture aux hidden states
         aux_hidden_states = []
         for i in range(self.start_layer, self.end_layer):
+            if i in self.layers_to_capture:
+                aux_hidden_states.append(
+                    hidden_states if residual is None else hidden_states + residual
+                )
             ctx = get_global_expert_distribution_recorder().with_current_layer(i)
             with ctx:
                 layer = self.layers[i]
@@ -636,6 +641,7 @@ class KimiLinearForCausalLM(nn.Module):
             self.lm_head = PPMissingLayer()
         logit_scale = getattr(self.config, "logit_scale", 1.0)
         self.logits_processor = LogitsProcessor(config=config, logit_scale=logit_scale)
+        self.capture_aux_hidden_states = False
 
     @torch.no_grad()
     def forward(
@@ -654,14 +660,29 @@ class KimiLinearForCausalLM(nn.Module):
             pp_proxy_tensors,
         )
         if self.pp_group.is_last_rank:
+            aux_hidden_states = None
+            if self.capture_aux_hidden_states:
+                hidden_states, aux_hidden_states = hidden_states
             return self.logits_processor(
-                input_ids, hidden_states, self.lm_head, forward_batch
+                input_ids, hidden_states, self.lm_head, forward_batch, aux_hidden_states
             )
         else:
             return hidden_states
 
     def get_embed_and_head(self):
         return self.model.embed_tokens.weight, self.lm_head.weight
+
+    def set_eagle3_layers_to_capture(
+        self, layer_ids: Optional[List[int]] = None
+    ) -> None:
+        if not self.pp_group.is_last_rank:
+            return
+        self.capture_aux_hidden_states = True
+        num_layers = self.config.num_hidden_layers
+        if layer_ids is None:
+            self.model.layers_to_capture = [2, num_layers // 2, num_layers - 3]
+        else:
+            self.model.layers_to_capture = [val + 1 for val in layer_ids]
 
     def load_weights(
         self, weights: Iterable[tuple[str, torch.Tensor]], is_nextn: bool = False
