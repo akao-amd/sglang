@@ -116,8 +116,18 @@ class EAGLEWorker(TpModelWorker):
             target_worker.get_memory_pool()
         )
 
+        # Peek at draft model config to detect Eagle3 behavior regardless of algorithm flag.
+        # This allows --speculative-algorithm EAGLE to work with Eagle3 draft checkpoints.
+        from transformers import AutoConfig as _AutoConfig
+
+        _draft_hf_config = _AutoConfig.from_pretrained(
+            server_args.speculative_draft_model_path, trust_remote_code=True
+        )
+        _draft_eagle_cfg = getattr(_draft_hf_config, "eagle_config", None) or {}
+        _draft_is_eagle3_model = _draft_eagle_cfg.get("use_aux_hidden_state", False)
+
         # Load hot token ids
-        if self.speculative_algorithm.is_eagle3():
+        if self.speculative_algorithm.is_eagle3() or _draft_is_eagle3_model:
             if server_args.speculative_token_map is not None:
                 logger.warning(
                     "Speculative token map specified, but EAGLE3 models already have this. Ignoring the specified token map."
@@ -132,7 +142,9 @@ class EAGLEWorker(TpModelWorker):
             self.hot_token_id = None
 
         # Init draft worker
-        if server_args.enable_dp_attention and self.speculative_algorithm.is_eagle3():
+        if server_args.enable_dp_attention and (
+            self.speculative_algorithm.is_eagle3() or _draft_is_eagle3_model
+        ):
             ctx = draft_tp_context(get_attention_tp_group())
         else:
             ctx = empty_context()
@@ -157,7 +169,14 @@ class EAGLEWorker(TpModelWorker):
 
         embed, head = self.target_worker.model_runner.model.get_embed_and_head()
 
-        if self.speculative_algorithm.is_eagle3():
+        # Determine whether the draft model behaves as an Eagle3 model.
+        # This covers both --speculative-algorithm EAGLE3 and Eagle3 draft checkpoints
+        # used with --speculative-algorithm EAGLE.
+        _draft_model_is_eagle3 = self.speculative_algorithm.is_eagle3() or getattr(
+            self.draft_model_runner.model, "capture_aux_hidden_states", False
+        )
+
+        if _draft_model_is_eagle3:
             # most cases EAGLE3 models don't share lm_head
             # but some models (e.g. nvidia/gpt-oss-120b-Eagle3) shares
             if (
@@ -191,14 +210,19 @@ class EAGLEWorker(TpModelWorker):
             draft_tp_context if server_args.enable_dp_attention else empty_context
         )
         self.eagle_use_aux_hidden_state = False
-        if self.speculative_algorithm.is_eagle3():
-            self.eagle_use_aux_hidden_state = True
-            eagle_config = getattr(
-                self.draft_model_runner.model_config.hf_config, "eagle_config", {}
+        eagle_config = (
+            getattr(
+                self.draft_model_runner.model_config.hf_config, "eagle_config", None
             )
+            or {}
+        )
+        if self.speculative_algorithm.is_eagle3():
             self.eagle_use_aux_hidden_state = eagle_config.get(
                 "use_aux_hidden_state", True
             )
+        elif eagle_config.get("use_aux_hidden_state", False):
+            # Eagle3 draft model used with plain --speculative-algorithm EAGLE
+            self.eagle_use_aux_hidden_state = True
         with self.draft_tp_context(
             self.draft_model_runner.tp_group
         ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
@@ -933,8 +957,7 @@ class EAGLEWorker(TpModelWorker):
             batch.prepare_for_idle()
             hidden_size = (
                 self.model_config.hidden_size * 3
-                if self.speculative_algorithm.is_eagle3()
-                and self.eagle_use_aux_hidden_state
+                if self.eagle_use_aux_hidden_state
                 else self.model_config.hidden_size
             )
             batch.spec_info = EagleDraftInput.create_idle_input(

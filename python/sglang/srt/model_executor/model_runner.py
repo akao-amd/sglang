@@ -354,27 +354,31 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         self.remote_instance_transfer_engine_weight_info = None
         # auxiliary hidden capture mode. TODO: expose this to server args?
         self.eagle_use_aux_hidden_state = False
-        if self.spec_algorithm.is_eagle3() and not self.is_draft_worker:
-            # load draft config
+        if self.spec_algorithm.is_eagle() and not self.is_draft_worker:
+            # load draft config to detect Eagle3 behavior (works for both EAGLE and EAGLE3)
             draft_model_config = ModelConfig.from_server_args(
                 server_args,
                 model_path=(server_args.speculative_draft_model_path),
                 model_revision=server_args.speculative_draft_model_revision,
                 is_draft_model=True,
             )
-            self.eagle_use_aux_hidden_state = True
+            # Default: True for EAGLE3 algorithm, False for plain EAGLE
+            self.eagle_use_aux_hidden_state = self.spec_algorithm.is_eagle3()
 
             try:
                 # get the aux layer from draft model config
                 eagle_config = getattr(
                     draft_model_config.hf_config, "eagle_config", None
                 )
-                self.eagle_use_aux_hidden_state = eagle_config.get(
-                    "use_aux_hidden_state", True
-                )
-                self.eagle_aux_hidden_state_layer_ids = eagle_config[
-                    "eagle_aux_hidden_state_layer_ids"
-                ]
+                if eagle_config is not None:
+                    self.eagle_use_aux_hidden_state = eagle_config.get(
+                        "use_aux_hidden_state", self.spec_algorithm.is_eagle3()
+                    )
+                    self.eagle_aux_hidden_state_layer_ids = eagle_config.get(
+                        "eagle_aux_hidden_state_layer_ids"
+                    )
+                else:
+                    self.eagle_aux_hidden_state_layer_ids = None
             except:
                 # if there is no aux layer, set to None
                 self.eagle_aux_hidden_state_layer_ids = None
