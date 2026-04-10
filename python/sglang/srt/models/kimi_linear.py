@@ -660,7 +660,12 @@ class KimiLinearForCausalLM(nn.Module):
         else:
             return hidden_states
 
-    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
+    def get_embed_and_head(self):
+        return self.model.embed_tokens.weight, self.lm_head.weight
+
+    def load_weights(
+        self, weights: Iterable[tuple[str, torch.Tensor]], is_nextn: bool = False
+    ):
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
             (".gate_up_proj", ".gate_proj", 0),
@@ -696,6 +701,33 @@ class KimiLinearForCausalLM(nn.Module):
             expert_params_mapping = []
         params_dict = dict(self.named_parameters())
         loaded_params: set[str] = set()
+
+        if is_nextn:
+            # The MTP head layer lives at model.layers.{num_hidden_layers} in the
+            # checkpoint.  Filter down to only those weights and remap them into
+            # the nextn module layout expected by KimiLinearForCausalLMNextN:
+            #   model.layers.{N}.* → model.decoder.*
+            #   model.{shared_head_name}   → model.{shared_head_name}  (unchanged)
+            nextn_layer_id = self.config.num_hidden_layers
+            nextn_layer_prefix = f"model.layers.{nextn_layer_id}."
+            nextn_spec_weight_names = ["shared_head.norm", "eh_proj", "enorm", "hnorm"]
+            filtered = []
+            for args in weights:
+                name = args[0]
+                # Keep shared-head / projection weights that live at the model root
+                if any(f"model.{w}" in name for w in nextn_spec_weight_names):
+                    filtered.append(args)
+                    continue
+                # Keep the MTP decoder layer; remap its prefix
+                if name.startswith(nextn_layer_prefix):
+                    new_name = "model.decoder." + name[len(nextn_layer_prefix) :]
+                    filtered.append((new_name,) + args[1:])
+                    continue
+                # Keep embeddings and lm_head (shared with target model)
+                if name.startswith("model.embed_tokens") or name.startswith("lm_head"):
+                    filtered.append(args)
+            weights = filtered
+
         for args in weights:
             name, loaded_weight = args[:2]
             kwargs = args[2] if len(args) > 2 else {}
@@ -781,8 +813,11 @@ class KimiLinearForCausalLM(nn.Module):
                     weight_loader(param, loaded_weight, **kwargs)
             loaded_params.add(name)
 
+        model_layers = getattr(self.model, "layers", None)
         for layer_id in self.config.full_attention_layer_ids:
-            self_attn = self.model.layers[layer_id].self_attn
+            if model_layers is None:
+                break
+            self_attn = model_layers[layer_id].self_attn
             w_kc, w_vc = self_attn.kv_b_proj.weight.unflatten(
                 0, (-1, self_attn.qk_nope_head_dim + self_attn.v_head_dim)
             ).split([self_attn.qk_nope_head_dim, self_attn.v_head_dim], dim=1)
@@ -791,5 +826,163 @@ class KimiLinearForCausalLM(nn.Module):
             if hasattr(self_attn.kv_b_proj, "weight_scale"):
                 self_attn.w_scale = self_attn.kv_b_proj.weight_scale
 
+        # For KimiLinearForCausalLMNextN the decoder is a single KimiDecoderLayer
+        # (not a layers list).  If it has MLA attention, post-process w_kc/w_vc too.
+        decoder = getattr(self.model, "decoder", None)
+        if decoder is not None and hasattr(decoder, "self_attn"):
+            self_attn = decoder.self_attn
+            if hasattr(self_attn, "kv_b_proj"):
+                w_kc, w_vc = self_attn.kv_b_proj.weight.unflatten(
+                    0, (-1, self_attn.qk_nope_head_dim + self_attn.v_head_dim)
+                ).split([self_attn.qk_nope_head_dim, self_attn.v_head_dim], dim=1)
+                self_attn.w_kc = w_kc.transpose(1, 2).contiguous().transpose(1, 2)
+                self_attn.w_vc = w_vc.contiguous().transpose(1, 2)
+                if hasattr(self_attn.kv_b_proj, "weight_scale"):
+                    self_attn.w_scale = self_attn.kv_b_proj.weight_scale
 
-EntryClass = KimiLinearForCausalLM
+
+class KimiModelNextN(nn.Module):
+    """Inner model for the Kimi-K2.5 MTP draft worker.
+
+    Mirrors DeepseekModelNextN / Glm4MoeModelNextN: a single decoder layer at
+    index 0 (for correct KV-pool indexing), preceded by the nextn-specific
+    embedding-projection head (enorm / hnorm / eh_proj) and followed by the
+    shared output norm.
+    """
+
+    def __init__(
+        self,
+        config: KimiLinearConfig,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ) -> None:
+        super().__init__()
+
+        self.embed_tokens = VocabParallelEmbedding(
+            config.vocab_size,
+            config.hidden_size,
+            prefix=add_prefix("embed_tokens", prefix),
+        )
+
+        self.enorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.hnorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.eh_proj = nn.Linear(2 * config.hidden_size, config.hidden_size, bias=False)
+
+        self.alt_stream = torch.cuda.Stream()
+
+        # Always use layer_idx=0 so the KV pool slot index stays in-bounds.
+        # The nextn checkpoint layer (model.layers.{num_hidden_layers}) is
+        # remapped to model.decoder.* by load_weights.
+        self.decoder = KimiDecoderLayer(
+            config=config,
+            layer_idx=0,
+            quant_config=quant_config,
+            prefix=add_prefix("decoder", prefix),
+            alt_stream=self.alt_stream,
+        )
+
+        self.shared_head = nn.Module()
+        self.shared_head.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor,
+        forward_batch: ForwardBatch,
+        input_embeds: torch.Tensor = None,
+    ) -> torch.Tensor:
+        total_num_layers = 1
+        device = input_embeds.device if input_embeds is not None else input_ids.device
+        zero_allocator = BumpAllocator(
+            buffer_size=total_num_layers * 2,
+            dtype=torch.float32,
+            device=device,
+        )
+
+        if input_embeds is None:
+            hidden_states = self.embed_tokens(input_ids)
+        else:
+            hidden_states = input_embeds
+
+        if hidden_states.shape[0] > 0:
+            hidden_states = self.eh_proj(
+                torch.cat(
+                    (
+                        self.enorm(hidden_states),
+                        self.hnorm(forward_batch.spec_info.hidden_states),
+                    ),
+                    dim=-1,
+                )
+            )
+
+        residual = None
+        hidden_states, residual = self.decoder(
+            positions=positions,
+            hidden_states=hidden_states,
+            forward_batch=forward_batch,
+            residual=residual,
+            zero_allocator=zero_allocator,
+        )
+
+        if not forward_batch.forward_mode.is_idle():
+            if residual is not None:
+                hidden_states, _ = self.shared_head.norm(hidden_states, residual)
+            else:
+                hidden_states = self.shared_head.norm(hidden_states)
+
+        return hidden_states
+
+
+class KimiLinearForCausalLMNextN(KimiLinearForCausalLM):
+    """Outer model wrapping KimiModelNextN for MTP speculative decoding.
+
+    Follows the DeepseekV3ForCausalLMNextN / Glm4MoeForCausalLMNextN pattern:
+    inherit from the base causal-LM class so load_weights and the logits
+    processor are reused, but replace the inner model with KimiModelNextN
+    which has no make_layers / start_layer / end_layer attributes.
+    """
+
+    def __init__(
+        self,
+        config: KimiLinearConfig,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ) -> None:
+        nn.Module.__init__(self)
+        self.config = config
+        self.quant_config = quant_config
+        self.pp_group = get_pp_group()
+
+        self.model = KimiModelNextN(
+            config, quant_config, prefix=maybe_prefix(prefix, "model")
+        )
+        self.lm_head = ParallelLMHead(
+            config.vocab_size,
+            config.hidden_size,
+            quant_config=quant_config,
+            prefix=maybe_prefix(prefix, "model.shared_head.head"),
+        )
+        logit_scale = getattr(config, "logit_scale", 1.0)
+        self.logits_processor = LogitsProcessor(config=config, logit_scale=logit_scale)
+
+    @torch.no_grad()
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor,
+        forward_batch: ForwardBatch,
+    ) -> torch.Tensor:
+        hidden_states = self.model(input_ids, positions, forward_batch)
+        return self.logits_processor(
+            input_ids, hidden_states, self.lm_head, forward_batch
+        )
+
+    def set_embed_and_head(self, embed: torch.Tensor, head: torch.Tensor):
+        self.model.embed_tokens.weight = embed
+        self.lm_head.weight = head
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
+        super().load_weights(weights, is_nextn=True)
+
+
+EntryClass = [KimiLinearForCausalLM, KimiLinearForCausalLMNextN]
