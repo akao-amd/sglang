@@ -640,12 +640,14 @@ class CudaGraphRunner:
 
         self.tbo_plugin = TboCudaGraphRunnerPlugin()
 
-        # Speculative_inference
-        if (
-            model_runner.spec_algorithm.is_eagle3()
-            and model_runner.eagle_use_aux_hidden_state
-        ):
-            self.model_runner.model.set_eagle3_layers_to_capture()
+        # Speculative inference: configure aux hidden state capture before graph capture.
+        # Use eagle_use_aux_hidden_state (not is_eagle3()) so that Eagle3 draft models
+        # work with --speculative-algorithm EAGLE as well as EAGLE3.
+        # Pass the specific layer IDs from the draft config rather than defaults.
+        if model_runner.eagle_use_aux_hidden_state:
+            self.model_runner.model.set_eagle3_layers_to_capture(
+                model_runner.eagle_aux_hidden_state_layer_ids
+            )
 
         # Capture
         try:
