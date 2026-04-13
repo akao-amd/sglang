@@ -182,10 +182,15 @@ class ModelRunnerKVCacheMixin:
         # MLATokenToKVPool allocates a flat buffer of (size + page_size, 1, kv_cache_dim)
         # stored as uint8 for fp8. If (size + page_size - 1) * kv_cache_dim > INT32_MAX
         # the kernel hits an assertion. Cap tokens before allocation to prevent this.
+        #
+        # Note: on AMD/HIP the fp8 kv_cache_dtype is torch.float8_e4m3fnuz (not fn),
+        # so we detect fp8 by element size == 1 rather than by specific dtype value.
+        _kv_elem_size = torch._utils._element_size(self.kv_cache_dtype)
+        _is_fp8_kv = _kv_elem_size == 1 and not is_float4_e2m1fn_x2(self.kv_cache_dtype)
         if (
             _is_hip
             and self.use_mla_backend
-            and self.kv_cache_dtype == torch.float8_e4m3fn
+            and _is_fp8_kv
             and not is_deepseek_nsa(self.model_config.hf_config)
         ):
             kv_cache_dim = (
