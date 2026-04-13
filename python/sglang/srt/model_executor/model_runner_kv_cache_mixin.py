@@ -174,7 +174,38 @@ class ModelRunnerKVCacheMixin:
         if self.mambaish_config is not None:
             rest_memory = self.handle_max_mamba_cache(rest_memory)
 
-        return int(rest_memory * (1 << 30)) // cell_size
+        max_total_num_tokens = int(rest_memory * (1 << 30)) // cell_size
+
+        # Guard against CK FMHA int32 index overflow for fp8 MLA on AMD GPUs.
+        # The CK batch-prefill kernel uses int32 offsets into the K cache buffer:
+        #   offset = token_idx * kv_cache_dim
+        # MLATokenToKVPool allocates a flat buffer of (size + page_size, 1, kv_cache_dim)
+        # stored as uint8 for fp8. If (size + page_size - 1) * kv_cache_dim > INT32_MAX
+        # the kernel hits an assertion. Cap tokens before allocation to prevent this.
+        if (
+            _is_hip
+            and self.use_mla_backend
+            and self.kv_cache_dtype == torch.float8_e4m3fn
+            and not is_deepseek_nsa(self.model_config.hf_config)
+        ):
+            kv_cache_dim = (
+                self.model_config.kv_lora_rank + self.model_config.qk_rope_head_dim
+            )
+            page_size = self.server_args.page_size
+            _INT32_MAX = (1 << 31) - 1
+            # Buffer holds (max_total_num_tokens + page_size) entries; worst index is
+            # (max_total_num_tokens + page_size - 1), so the constraint is:
+            # (max_total_num_tokens + page_size - 1) * kv_cache_dim <= INT32_MAX
+            max_safe_tokens = _INT32_MAX // kv_cache_dim - page_size + 1
+            if max_total_num_tokens > max_safe_tokens:
+                logger.warning(
+                    f"Capping max_total_num_tokens from {max_total_num_tokens} to "
+                    f"{max_safe_tokens} to avoid CK FMHA int32 index overflow "
+                    f"(fp8 MLA: kv_cache_dim={kv_cache_dim}, page_size={page_size})."
+                )
+                max_total_num_tokens = max_safe_tokens
+
+        return max_total_num_tokens
 
     def handle_max_mamba_cache(self: ModelRunner, total_rest_memory):
         config = self.mambaish_config
