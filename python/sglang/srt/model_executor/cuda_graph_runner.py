@@ -650,7 +650,11 @@ class CudaGraphRunner:
         # Capture
         try:
             with model_capture_mode():
-                self.capture()
+                os.environ["AKAO_PHASE"] = "decode"
+                try:
+                    self.capture()
+                finally:
+                    del os.environ["AKAO_PHASE"]
         except RuntimeError as e:
             raise Exception(
                 f"Capture cuda graph failed: {e}\n{CUDA_GRAPH_CAPTURE_FAILED_MSG}"
