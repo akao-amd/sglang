@@ -40,12 +40,20 @@ concurrency:
 jobs:
   # Stage 1: Check if AITER needs to be rebuilt
   check-aiter-version:
-    if: github.repository == 'sgl-project/sglang'
+    if: |
+      github.repository == 'sgl-project/sglang' &&
+      (inputs.rocm_version == 'all' || inputs.rocm_version == matrix.rocm-version || inputs.rocm_version == '')
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rocm-version: ["700", "720"]
     outputs:
-      rebuild_needed: ${{ steps.check.outputs.rebuild_needed }}
-      aiter_version: ${{ steps.check.outputs.aiter_version }}
-      aiter_commit: ${{ steps.check.outputs.aiter_commit }}
+      rebuild_needed_700: ${{ steps.check.outputs.rebuild_needed_700 }}
+      rebuild_needed_720: ${{ steps.check.outputs.rebuild_needed_720 }}
+      aiter_version_700: ${{ steps.check.outputs.aiter_version_700 }}
+      aiter_version_720: ${{ steps.check.outputs.aiter_version_720 }}
+      aiter_commit_700: ${{ steps.check.outputs.aiter_commit_700 }}
+      aiter_commit_720: ${{ steps.check.outputs.aiter_commit_720 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,15 +64,16 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AMD_AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AMD_AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: us-east-2
 
-      - name: Check AITER version
+      - name: Check AITER version for ROCm ${{ matrix.rocm-version }}
         id: check
         env:
           AMD_S3_BUCKET_NAME: ${{ secrets.AMD_S3_BUCKET_NAME }}
         run: |
           chmod +x scripts/check_aiter_version.sh
-          OUTPUT=$(bash scripts/check_aiter_version.sh)
+          ROCM_VER="${{ matrix.rocm-version }}"
+          OUTPUT=$(bash scripts/check_aiter_version.sh "$ROCM_VER")
           echo "$OUTPUT"
 
           # Parse output
@@ -78,11 +87,12 @@ jobs:
             REBUILD_NEEDED=true
           fi
 
-          echo "rebuild_needed=${REBUILD_NEEDED}" >> $GITHUB_OUTPUT
-          echo "aiter_version=${AITER_VERSION}" >> $GITHUB_OUTPUT
-          echo "aiter_commit=${AITER_COMMIT}" >> $GITHUB_OUTPUT
+          # Output with ROCm version suffix for cross-job access
+          echo "rebuild_needed_${ROCM_VER}=${REBUILD_NEEDED}" >> $GITHUB_OUTPUT
+          echo "aiter_version_${ROCM_VER}=${AITER_VERSION}" >> $GITHUB_OUTPUT
+          echo "aiter_commit_${ROCM_VER}=${AITER_COMMIT}" >> $GITHUB_OUTPUT
 
-          echo "AITER check results:"
+          echo "AITER check results for ROCm ${ROCM_VER}:"
           echo "  Version: ${AITER_VERSION}"
           echo "  Commit: ${AITER_COMMIT}"
           echo "  Rebuild needed: ${REBUILD_NEEDED}"
@@ -90,7 +100,9 @@ jobs:
   # Stage 2: Build AITER wheels (conditional)
   build-aiter-rocm:
     needs: check-aiter-version
-    if: needs.check-aiter-version.outputs.rebuild_needed == 'true'
+    if: |
+      (matrix.rocm-version == '700' && needs.check-aiter-version.outputs.rebuild_needed_700 == 'true') ||
+      (matrix.rocm-version == '720' && needs.check-aiter-version.outputs.rebuild_needed_720 == 'true')
     runs-on: amd-docker-scale
     strategy:
       matrix:
@@ -156,21 +168,13 @@ jobs:
               # Build wheel with setup.py (PREBUILD_KERNELS=0 for current AITER)
               PREBUILD_KERNELS=0 GPU_ARCHS=\${GPU_ARCH} python3 setup.py bdist_wheel
 
-              # Rename wheel to add ROCm suffix
+              # Copy wheel to workspace without renaming
+              # Note: AITER wheels are NOT versioned with +rocm suffix
+              # They are built per ROCm version but keep the same version string
               cd dist
               for wheel in *.whl; do
-                # Extract base name: aiter-0.1.12-cp310-cp310-linux_x86_64.whl
-                # Add ROCm suffix: aiter-0.1.12+rocm700-cp310-cp310-manylinux2014_x86_64.whl
-                if [[ \$wheel =~ (.*)-([0-9.]+)(.*)-linux_(.*)\.whl ]]; then
-                  pkg_name=\"\${BASH_REMATCH[1]}\"
-                  version=\"\${BASH_REMATCH[2]}\"
-                  python_abi=\"\${BASH_REMATCH[3]}\"
-                  platform=\"\${BASH_REMATCH[4]}\"
-                  new_wheel=\"\${pkg_name}-\${version}+rocm\${ROCM_VERSION}\${python_abi}-manylinux2014_\${platform}.whl\"
-                  mv \"\$wheel\" \"\$new_wheel\"
-                  echo \"Renamed: \$wheel -> \$new_wheel\"
-                  echo \"\$new_wheel\" > /workspace/wheel_name.txt
-                fi
+                echo \"Built wheel: \$wheel\"
+                echo \"\$wheel\" > /workspace/wheel_name.txt
               done
 
               # Copy to workspace
@@ -194,7 +198,10 @@ jobs:
   # Stage 3: Build sglang wheels
   build-sglang-rocm:
     needs: [check-aiter-version, build-aiter-rocm]
-    if: always()  # Run even if AITER build was skipped
+    if: |
+      always() &&
+      ((matrix.rocm-version == '700' && needs.check-aiter-version.outputs.aiter_version_700 != '') ||
+       (matrix.rocm-version == '720' && needs.check-aiter-version.outputs.aiter_version_720 != ''))
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -294,7 +301,10 @@ jobs:
   # Stage 4: Upload to S3 (both AITER and sglang)
   upload-to-s3:
     needs: [check-aiter-version, build-aiter-rocm, build-sglang-rocm]
-    if: always()  # Run even if AITER was skipped
+    if: |
+      always() &&
+      ((matrix.rocm-version == '700' && needs.check-aiter-version.outputs.aiter_version_700 != '') ||
+       (matrix.rocm-version == '720' && needs.check-aiter-version.outputs.aiter_version_720 != ''))
     runs-on: ubuntu-latest
     environment: 'prod'
     strategy:
@@ -362,26 +372,26 @@ jobs:
           if [[ -d dist/aiter ]] && [[ -n "$(ls -A dist/aiter 2>/dev/null)" ]]; then
             echo "AITER wheels found, adding to index"
 
-            mkdir -p s3_upload/rocm${ROCM_VER}/simple/aiter
-            mkdir -p s3_upload/rocm${ROCM_VER}/packages/aiter
+            mkdir -p s3_upload/rocm${ROCM_VER}/simple/amd-aiter
+            mkdir -p s3_upload/rocm${ROCM_VER}/packages/amd-aiter
 
             # Copy AITER wheels to packages/
-            cp dist/aiter/*.whl s3_upload/rocm${ROCM_VER}/packages/aiter/
+            cp dist/aiter/*.whl s3_upload/rocm${ROCM_VER}/packages/amd-aiter/
 
             # Create AITER package index
-            cd s3_upload/rocm${ROCM_VER}/simple/aiter
+            cd s3_upload/rocm${ROCM_VER}/simple/amd-aiter
             cat > index.html << 'EOF'
           <!DOCTYPE html>
           <html>
-          <head><title>Links for aiter</title></head>
+          <head><title>Links for amd-aiter</title></head>
           <body>
-          <h1>Links for aiter</h1>
+          <h1>Links for amd-aiter</h1>
           EOF
 
-            for wheel in ../../packages/aiter/*.whl; do
+            for wheel in ../../packages/amd-aiter/*.whl; do
               filename=$(basename "$wheel")
               sha256=$(sha256sum "$wheel" | cut -d' ' -f1)
-              echo "<a href=\"../../packages/aiter/${filename}#sha256=${sha256}\">${filename}</a><br>" >> index.html
+              echo "<a href=\"../../packages/amd-aiter/${filename}#sha256=${sha256}\">${filename}</a><br>" >> index.html
             done
 
             echo "</body></html>" >> index.html
@@ -396,7 +406,7 @@ jobs:
           <head><title>Simple index</title></head>
           <body>
           <h1>Simple index</h1>
-          <a href="aiter/">aiter</a><br>
+          <a href="amd-aiter/">amd-aiter</a><br>
           <a href="sglang/">sglang</a><br>
           </body>
           </html>
@@ -428,7 +438,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AMD_AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AMD_AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: us-east-2
 
       - name: Upload to S3
         run: |
