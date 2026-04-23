@@ -18,24 +18,32 @@
 #include <cstdint>
 #include <optional>
 
+#include "utils.h"
+
 namespace {
 
 constexpr int TopK = 2048;
 constexpr int kThreadsPerBlock = 1024;
 
 #ifdef USE_ROCM
-// On ROCm, the per-workgroup LDS budget depends on the target arch, so we inject a
-// per-arch value from `setup_rocm.py` via `-DSGL_TOPK_DYNAMIC_SMEM_BYTES=...`.
-#ifdef SGL_TOPK_DYNAMIC_SMEM_BYTES
-constexpr size_t kSmem = static_cast<size_t>(SGL_TOPK_DYNAMIC_SMEM_BYTES);
+// On ROCm, the per-workgroup LDS budget depends on the target arch.
+// For multi-arch builds, use the maximum of both architectures for compile-time sizing,
+// but launch with the actual required size at runtime.
+// - gfx942 needs 48KB, gfx950 needs 128KB
+// - Device code uses compile-time kSmem for array sizing (must use max)
+// - Host code uses runtime get_ksmem_size() for kernel launch parameter
+constexpr size_t kSmem = 128 * 1024;  // Max of both architectures
+inline size_t get_ksmem_size() {
+  return sgl_kernel::get_topk_smem_size();  // Runtime: 48KB or 128KB
+}
 #else
-constexpr size_t kSmem = 48 * 1024;  // bytes
-#endif
-#else
-// Reduced from 128KB to 32KB to improve occupancy.
+// CUDA: Reduced from 128KB to 32KB to improve occupancy.
 // Each radix pass needs at most ~TopK candidates in the threshold bin,
 // so 4K entries per round (2 rounds = 8K entries = 32KB) is sufficient.
 constexpr size_t kSmem = 8 * 1024 * sizeof(uint32_t);  // 32KB (bytes)
+inline size_t get_ksmem_size() {
+  return kSmem;
+}
 #endif
 
 struct FastTopKParams {
@@ -430,6 +438,19 @@ void setup_kernel_smem_once() {
   TORCH_CHECK(result == cudaSuccess, "set_up_kernel_once failed:", ::cudaGetErrorString(result));
 }
 
+// Runtime version for dynamic smem size
+template <auto* f>
+void setup_kernel_smem_runtime(size_t max_dynamic_smem) {
+  cudaError_t result;
+#ifdef USE_ROCM
+  result = ::cudaFuncSetAttribute(
+      reinterpret_cast<const void*>(f), ::cudaFuncAttributeMaxDynamicSharedMemorySize, max_dynamic_smem);
+#else
+  result = ::cudaFuncSetAttribute(f, ::cudaFuncAttributeMaxDynamicSharedMemorySize, max_dynamic_smem);
+#endif
+  TORCH_CHECK(result == cudaSuccess, "setup_kernel_smem_runtime failed:", ::cudaGetErrorString(result));
+}
+
 }  // namespace
 
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
@@ -447,7 +468,8 @@ void fast_topk_interface(
   const auto stream = at::cuda::getCurrentCUDAStream().stream();
   const auto grid = dim3{static_cast<uint32_t>(B)};
   const auto block = dim3{kThreadsPerBlock};
-  setup_kernel_smem_once<topk_kernel, kSmem>();
+  const auto kSmem = get_ksmem_size();
+  setup_kernel_smem_runtime<topk_kernel>(kSmem);
   topk_kernel<<<grid, block, kSmem, stream>>>(params);
   const auto result = cudaGetLastError();
   TORCH_CHECK(result == cudaSuccess, "topk kernel failed:", ::cudaGetErrorString(result));
@@ -489,13 +511,14 @@ void fast_topk_transform_interface(
   // extend and draft extend: row_starts_opt is not null, invokes the prefill kernel
   // decode: row_starts_opt is null, invokes the decode kernel
   // target verify: row_starts_opt is null, invokes the prefill kernel
+  const auto kSmem = get_ksmem_size();
   const auto is_decode = !row_starts_opt.has_value() && prefill_bs == B;
   if (is_decode) {
-    setup_kernel_smem_once<topk_transform_decode_kernel, kSmem>();
+    setup_kernel_smem_runtime<topk_transform_decode_kernel>(kSmem);
     topk_transform_decode_kernel<<<grid, block, kSmem, stream>>>(
         params, dst_page_table.data_ptr<int32_t>(), src_page_table.data_ptr<int32_t>(), src_stride);
   } else {
-    setup_kernel_smem_once<topk_transform_prefill_kernel, kSmem>();
+    setup_kernel_smem_runtime<topk_transform_prefill_kernel>(kSmem);
     topk_transform_prefill_kernel<<<grid, block, kSmem, stream>>>(
         params,
         dst_page_table.data_ptr<int32_t>(),
@@ -536,8 +559,9 @@ void fast_topk_transform_ragged_interface(
   const auto stream = at::cuda::getCurrentCUDAStream().stream();
   const auto grid = dim3{static_cast<uint32_t>(B)};
   const auto block = dim3{kThreadsPerBlock};
+  const auto kSmem = get_ksmem_size();
 
-  setup_kernel_smem_once<topk_transform_prefill_ragged_kernel, kSmem>();
+  setup_kernel_smem_runtime<topk_transform_prefill_ragged_kernel>(kSmem);
   topk_transform_prefill_ragged_kernel<<<grid, block, kSmem, stream>>>(
       params, topk_indices_ragged.data_ptr<int32_t>(), topk_indices_offset.data_ptr<int32_t>());
 
