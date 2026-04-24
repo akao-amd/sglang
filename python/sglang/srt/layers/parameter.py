@@ -51,9 +51,32 @@ def copy_with_check(target: torch.Tensor, loaded_weight: torch.Tensor):
     bf16/fp16 share the same rank, and all fp8 variants share the same rank.
     """
 
-    assert (
-        target.shape == loaded_weight.shape
-    ), f"{target.shape=}, {loaded_weight.shape=}"
+    if target.shape != loaded_weight.shape:
+        # Get parameter name from the stack for debugging
+        import inspect
+
+        frame = inspect.currentframe()
+        param_name = "unknown"
+        try:
+            # Try to get the parameter name from caller's context
+            caller_frame = frame.f_back
+            if caller_frame and "self" in caller_frame.f_locals:
+                param_obj = caller_frame.f_locals.get("self")
+                param_name = getattr(param_obj, "weight_name", "unknown")
+        finally:
+            del frame
+
+        error_msg = (
+            f"\n{'='*80}\n"
+            f"Weight loading shape mismatch in copy_with_check\n"
+            f"  Parameter: {param_name}\n"
+            f"  Expected shape (target): {target.shape}\n"
+            f"  Got shape (loaded_weight): {loaded_weight.shape}\n"
+            f"  Target dtype: {target.dtype}\n"
+            f"  Loaded dtype: {loaded_weight.dtype}\n"
+            f"{'='*80}\n"
+        )
+        raise AssertionError(error_msg)
 
     if target.dtype == loaded_weight.dtype:
         target.copy_(loaded_weight)
@@ -159,7 +182,20 @@ class _ColumnvLLMParameter(BasevLLMParameter):
                     self.output_dim,
                     shard_size,
                 )
-                assert param_data.shape == loaded_weight.shape
+                if param_data.shape != loaded_weight.shape:
+                    param_name = getattr(self, "weight_name", "unknown")
+                    error_msg = (
+                        f"\n{'='*80}\n"
+                        f"Weight loading shape mismatch (CPU path)\n"
+                        f"  Parameter: {param_name}\n"
+                        f"  Expected shape (param_data): {param_data.shape}\n"
+                        f"  Got shape (loaded_weight): {loaded_weight.shape}\n"
+                        f"  Output dim: {self.output_dim}\n"
+                        f"  TP rank: {tp_rank}\n"
+                        f"  Shard size: {shard_size}\n"
+                        f"{'='*80}\n"
+                    )
+                    raise AssertionError(error_msg)
                 param_data.copy_(loaded_weight)
                 return
             else:

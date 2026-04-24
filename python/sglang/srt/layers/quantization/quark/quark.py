@@ -54,7 +54,9 @@ class QuarkConfig(QuantizationConfig):
         self.pack_method = pack_method
         self.exclude_layers = cast(list[str], self.quant_config.get("exclude", []))
 
-        self.packed_modules_mapping = self.quant_config["packed_modules_mapping"]
+        self.packed_modules_mapping = self.quant_config.get(
+            "packed_modules_mapping", {}
+        )
 
     def get_linear_method(self) -> "QuarkLinearMethod":
         return QuarkLinearMethod(self)
@@ -73,15 +75,47 @@ class QuarkConfig(QuantizationConfig):
     def apply_weight_name_mapper(self, hf_to_sglang_mapper):
         self.exclude_layers = hf_to_sglang_mapper.apply_list(self.exclude_layers)
 
+        # Additional fix for Kimi K2.5 MXFP4: strip "language_model." prefix
+        # The checkpoint's exclude list uses "language_model.model.layers.*"
+        # but SGLang layers use "model.layers.*" (without language_model prefix)
+        self.exclude_layers = [
+            (
+                name.replace("language_model.", "", 1)
+                if name.startswith("language_model.")
+                else name
+            )
+            for name in self.exclude_layers
+        ]
+
+        # Fix for fused layers: if both q_a_proj and kv_a_proj_with_mqa are excluded,
+        # then fused_qkv_a_proj_with_mqa should also be excluded
+        additional_excludes = []
+        exclude_set = set(self.exclude_layers)
+        for layer_name in list(exclude_set):
+            if layer_name.endswith(".q_a_proj"):
+                # Check if corresponding kv_a_proj_with_mqa is also excluded
+                kv_layer = layer_name.replace(".q_a_proj", ".kv_a_proj_with_mqa")
+                if kv_layer in exclude_set:
+                    # Add the fused version
+                    fused_layer = layer_name.replace(
+                        ".q_a_proj", ".fused_qkv_a_proj_with_mqa"
+                    )
+                    additional_excludes.append(fused_layer)
+                    logger.info(f"Adding fused layer to exclude list: {fused_layer}")
+
+        self.exclude_layers.extend(additional_excludes)
+
     def get_quant_method(
         self, layer: torch.nn.Module, prefix: str
     ) -> Optional["QuantizeMethodBase"]:
         # Check if the layer is skipped for quantization.
-        if should_ignore_layer(
+        is_excluded = should_ignore_layer(
             prefix,
             ignore=self.exclude_layers,
             fused_mapping=self.packed_modules_mapping,
-        ):
+        )
+
+        if is_excluded:
             if isinstance(layer, LinearBase):
                 return UnquantizedLinearMethod()
             elif isinstance(layer, RadixAttention):

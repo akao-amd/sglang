@@ -35,6 +35,7 @@ from sglang.srt.layers.parameter import (
     PerTensorScaleParameter,
     RowvLLMParameter,
     _ColumnvLLMParameter,
+    copy_with_check,
 )
 from sglang.srt.layers.utils import pad_or_narrow_weight
 from sglang.srt.utils import get_bool_env_var, is_cpu, is_hip, is_npu, set_weight_attrs
@@ -269,8 +270,64 @@ class ReplicatedLinear(LinearBase):
                     param.dtype == loaded_weight.dtype
                 ), "init para dtype and loaded weight dtype should be the same"
 
-        assert param.size() == loaded_weight.size()
-        param.data.copy_(loaded_weight)
+        # Handle packed parameters (e.g., MXFP4 quantization)
+        if isinstance(param, PackedvLLMParameter):
+            # The checkpoint may have unpacked weights (1 value per byte for FP4)
+            # but the parameter expects packed weights (2 values per byte for FP4)
+            if (
+                param.packed_factor == 2
+                and param.packed_dim is not None
+                and param.data.dtype == torch.uint8
+                and loaded_weight.dtype == torch.uint8
+            ):
+
+                # Check if we need to pack the weights
+                expected_packed_size = list(param.data.shape)
+                unpacked_size = expected_packed_size.copy()
+                unpacked_size[param.packed_dim] *= param.packed_factor
+
+                if list(loaded_weight.shape) == unpacked_size:
+                    # Need to pack the weights along the packed dimension
+                    # For FP4: pack 2 values (each 4 bits) into 1 byte (8 bits)
+
+                    # Move packed dim to last position for easier packing
+                    perm = list(range(loaded_weight.ndim))
+                    perm[param.packed_dim], perm[-1] = perm[-1], perm[param.packed_dim]
+                    loaded_weight = loaded_weight.permute(*perm)
+
+                    # Pack: (odd << 4) | even
+                    even = loaded_weight[..., 0::2]
+                    odd = loaded_weight[..., 1::2]
+                    loaded_weight = ((odd << 4) | even).contiguous()
+
+                    # Permute back
+                    loaded_weight = loaded_weight.permute(*perm)
+
+        # Handle case where PackedvLLMParameter was created but weight is not packed
+        # This happens when a layer is in the quantization exclude list
+        if (
+            isinstance(param, PackedvLLMParameter)
+            and param.size() != loaded_weight.size()
+        ):
+            # Check if this is an unpacked weight for a supposedly packed parameter
+            if param.packed_factor and param.packed_dim is not None:
+                expected_unpacked_size = list(param.data.shape)
+                expected_unpacked_size[param.packed_dim] *= param.packed_factor
+
+                if list(loaded_weight.shape) == expected_unpacked_size:
+                    # This should not happen anymore with the fused layer fix,
+                    # but keep this as a safety check with a clear error message
+                    raise RuntimeError(
+                        f"PackedvLLMParameter received unpacked weight:\n"
+                        f"  param.shape: {param.shape}, dtype: {param.dtype}\n"
+                        f"  loaded_weight.shape: {loaded_weight.shape}, dtype: {loaded_weight.dtype}\n"
+                        f"  packed_factor: {param.packed_factor}, packed_dim: {param.packed_dim}\n\n"
+                        f"This layer should have been excluded from quantization.\n"
+                        f"If you see this error, the exclude list may be incomplete."
+                    )
+
+        # Use copy_with_check which handles dtype conversions properly
+        copy_with_check(param.data, loaded_weight)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         bias = self.bias if not self.skip_bias_add else None
@@ -425,7 +482,21 @@ class ColumnParallelLinear(LinearBase):
         if len(loaded_weight.shape) == 0:
             loaded_weight = loaded_weight.reshape(1)
 
-        assert param_data.shape == loaded_weight.shape
+        if param_data.shape != loaded_weight.shape:
+            # Get parameter name for debugging
+            param_name = getattr(param, "weight_name", "unknown")
+            error_msg = (
+                f"\n{'='*80}\n"
+                f"Weight loading shape mismatch for parameter: {param_name}\n"
+                f"  Expected shape (param_data): {param_data.shape}\n"
+                f"  Got shape (loaded_weight):   {loaded_weight.shape}\n"
+                f"  Parameter type: {type(param)}\n"
+                f"  Output dim: {output_dim}\n"
+                f"  TP rank: {self.tp_rank}\n"
+                f"  Use presharded weights: {self.use_presharded_weights}\n"
+                f"{'='*80}\n"
+            )
+            raise AssertionError(error_msg)
         param_data.copy_(loaded_weight)
 
     def weight_loader_v2(self, param: Parameter, loaded_weight: torch.Tensor):

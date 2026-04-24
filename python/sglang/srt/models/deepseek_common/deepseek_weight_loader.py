@@ -345,6 +345,8 @@ class DeepseekV2WeightLoaderMixin:
                                 logger.warning(f"{name} not found in params_dict.")
                                 continue
                             param = params_dict[name]
+                            # Store weight name for debugging
+                            param.weight_name = name
                             weight_loader = getattr(
                                 param, "weight_loader", default_weight_loader
                             )

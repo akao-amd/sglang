@@ -47,7 +47,7 @@ class QuarkW4A4MXFP4(QuarkLinearScheme):
         input_size_per_partition: int,
         params_dtype: torch.dtype,
         weight_loader: Callable,
-        **kwargs
+        **kwargs,
     ):
         output_size_per_partition = sum(output_partition_sizes)
         layer.logical_widths = output_partition_sizes
@@ -86,6 +86,34 @@ class QuarkW4A4MXFP4(QuarkLinearScheme):
         x: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        # Fallback for layers excluded from quantization (e.g., in exclude list)
+        # These have bfloat16 weights instead of uint8 packed weights
+        if layer.weight.dtype != torch.uint8:
+            # Use regular linear for non-quantized weights
+            import torch.nn.functional as F
+
+            if isinstance(x, tuple):
+                x = x[0]  # Extract tensor from tuple if needed
+
+            # Check if input size matches weight - if not, the input might still be packed
+            # while the weight is unpacked (excluded layer in a quantized model)
+            if x.shape[-1] * 2 == layer.weight.shape[-1]:
+                # Input is packed but weight is unpacked - need to unpack input
+                # This shouldn't happen in a properly configured model, but handle it
+                # For now, just use the weight transposed and hope dimensions work
+                # Actually, let's just error out clearly
+                raise RuntimeError(
+                    f"Size mismatch in excluded layer: "
+                    f"input={x.shape}, weight={layer.weight.shape}. "
+                    f"Input appears to be packed (size {x.shape[-1]}) "
+                    f"but weight is unpacked (size {layer.weight.shape[-1]}). "
+                    f"This suggests incorrect model configuration - excluded layers "
+                    f"should not be created with PackedvLLMParameter."
+                )
+
+            output = F.linear(x, layer.weight, bias)
+            return output
+
         # This path does not have support for bias currently
         assert bias is None, "bias is not supported"
 
