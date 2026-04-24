@@ -26,15 +26,13 @@ constexpr int TopK = 2048;
 constexpr int kThreadsPerBlock = 1024;
 
 #ifdef USE_ROCM
-// On ROCm, the per-workgroup LDS budget depends on the target arch.
-// For multi-arch builds, use the maximum of both architectures for compile-time sizing,
-// but launch with the actual required size at runtime.
-// - gfx942 needs 48KB, gfx950 needs 128KB
-// - Device code uses compile-time kSmem for array sizing (must use max)
-// - Host code uses runtime get_ksmem_size() for kernel launch parameter
-constexpr size_t kSmem = 128 * 1024;  // Max of both architectures
+// For multi-arch ROCm builds, we must use the MINIMUM shared memory that works on all archs.
+// - gfx942 (MI300): hardware limit ~64KB total LDS, need ~48KB for dynamic smem
+// - gfx950 (MI350): can handle 128KB, but we use 48KB for compatibility
+// Both compile-time (device arrays) and runtime (allocation) must use the same value.
+constexpr size_t kSmem = 48 * 1024;  // Conservative value that works on all ROCm archs
 inline size_t get_ksmem_size() {
-  return sgl_kernel::get_topk_smem_size();  // Runtime: 48KB or 128KB
+  return kSmem;  // MUST match compile-time value!
 }
 #else
 // CUDA: Reduced from 128KB to 32KB to improve occupancy.
