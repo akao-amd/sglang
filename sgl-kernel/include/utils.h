@@ -390,74 +390,16 @@ enum class FP8TypeEnum {
 };
 
 // Get base GPU architecture name (e.g., "gfx942" or "gfx950")
-inline std::string get_device_arch_name() {
-  static std::string cached_arch;
-  if (!cached_arch.empty()) {
-    return cached_arch;
-  }
-
-  int device = -1;
-  hipError_t err = hipGetDevice(&device);
-  if (err != hipSuccess) {
-    throw std::runtime_error("Failed to get current device");
-  }
-
-  hipDeviceProp_t prop;
-  err = hipGetDeviceProperties(&prop, device);
-  if (err != hipSuccess) {
-    throw std::runtime_error("Failed to get device properties");
-  }
-
-  // Extract base architecture (e.g., "gfx942:sramecc+:xnack-" -> "gfx942")
-  std::string full_arch(prop.gcnArchName);
-  size_t colon_pos = full_arch.find(':');
-  cached_arch = (colon_pos != std::string::npos) ? full_arch.substr(0, colon_pos) : full_arch;
-
-  return cached_arch;
-}
+// Defined in csrc/rocm_utils.cc to avoid ODR violations
+std::string get_device_arch_name();
 
 // Get FP8 type for current GPU
-inline FP8TypeEnum get_fp8_type() {
-  static FP8TypeEnum cached_type = FP8TypeEnum::E4M3FN;
-  static bool initialized = false;
-
-  if (!initialized) {
-    std::string arch = get_device_arch_name();
-    if (arch == "gfx942") {
-      cached_type = FP8TypeEnum::E4M3FNUZ;
-    } else if (arch == "gfx950") {
-      cached_type = FP8TypeEnum::E4M3FN;
-    } else {
-      throw std::runtime_error("Unsupported GPU architecture for FP8: " + arch);
-    }
-    initialized = true;
-  }
-
-  return cached_type;
-}
+// Defined in csrc/rocm_utils.cc to avoid ODR violations
+FP8TypeEnum get_fp8_type();
 
 // Get TopK dynamic shared memory size for current GPU
-inline size_t get_topk_smem_size() {
-  static size_t cached_smem = 0;
-  if (cached_smem != 0) {
-    return cached_smem;
-  }
-
-  std::string arch = get_device_arch_name();
-  if (arch == "gfx942") {
-    // gfx942 (MI300/MI325): LDS is typically 64KB per workgroup
-    // Keep dynamic smem <= ~48KB (leaves room for static shared allocations)
-    cached_smem = 48 * 1024;
-  } else if (arch == "gfx950") {
-    // gfx950 (MI350): LDS is larger (e.g. 160KB per CU)
-    // Allow the original 128KB dynamic smem
-    cached_smem = 128 * 1024;
-  } else {
-    throw std::runtime_error("Unsupported GPU architecture for TopK SMEM: " + arch);
-  }
-
-  return cached_smem;
-}
+// Defined in csrc/rocm_utils.cc to avoid ODR violations
+size_t get_topk_smem_size();
 
 }  // namespace sgl_kernel
 #endif  // USE_ROCM
