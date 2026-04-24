@@ -89,15 +89,15 @@ for arch in amdgpu_targets:
 
 print(f"Building for architectures: {', '.join(amdgpu_targets)}")
 
-# Multi-arch build: Define both FP8 types so runtime selection can work
+# Multi-arch build: Define both FP8 types so compile-time selection can work
 # For single-arch builds, we still define both to keep code consistent
 fp8_macros = [
     "-DHIP_FP8_TYPE_FNUZ=1",  # For gfx942
     "-DHIP_FP8_TYPE_E4M3=1",  # For gfx950
 ]
 
-# Note: SMEM sizing is now handled at runtime via get_topk_smem_size()
-# We no longer pass SGL_TOPK_DYNAMIC_SMEM_BYTES as a compile-time macro
+# Note: SMEM sizing for topk kernel uses compile-time constant (48KB) that works on all archs.
+# Multi-arch builds must use the minimum value that is safe on all target architectures.
 
 hipcc_flags = [
     "-DNDEBUG",

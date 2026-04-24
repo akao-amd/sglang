@@ -378,38 +378,19 @@ C10_HOST_DEVICE constexpr auto FP8_E4M3_MAX = std::numeric_limits<FP8_TYPE>::max
 #include <c10/util/Float8_e4m3fn.h>
 #include <c10/util/Float8_e4m3fnuz.h>
 
-// Runtime GPU architecture detection helpers
+// Note: Runtime GPU architecture detection functions removed.
+// For multi-arch ROCm builds, use compile-time constants instead of runtime detection.
 #ifdef USE_ROCM
 #include <hip/hip_runtime.h>
-
-namespace sgl_kernel {
-
-enum class FP8TypeEnum {
-  E4M3FNUZ,  // For gfx942 (MI300/MI325)
-  E4M3FN     // For gfx950 (MI350)
-};
-
-// Get base GPU architecture name (e.g., "gfx942" or "gfx950")
-// Defined in csrc/rocm_utils.cc to avoid ODR violations
-std::string get_device_arch_name();
-
-// Get FP8 type for current GPU
-// Defined in csrc/rocm_utils.cc to avoid ODR violations
-FP8TypeEnum get_fp8_type();
-
-// Get TopK dynamic shared memory size for current GPU
-// Defined in csrc/rocm_utils.cc to avoid ODR violations
-size_t get_topk_smem_size();
-
-}  // namespace sgl_kernel
 #endif  // USE_ROCM
 
-// Legacy FP8_TYPE definition for backward compatibility
-// Note: For multi-arch builds, code should use runtime FP8 type selection
+// FP8_TYPE definition for backward compatibility
+// For multi-arch builds, use conservative gfx942 limits for safety.
+// gfx942: E4M3FNUZ with max=224.0f, gfx950: E4M3FN with max=448.0f
 #if HIP_FP8_TYPE_FNUZ && HIP_FP8_TYPE_E4M3
-// Multi-arch build: default to E4M3FN, but code should check at runtime
-using FP8_TYPE = c10::Float8_e4m3fn;
-constexpr auto FP8_E4M3_MAX = 448.0f;
+// Multi-arch build: use gfx942 (E4M3FNUZ) type and limits for compatibility
+using FP8_TYPE = c10::Float8_e4m3fnuz;
+constexpr auto FP8_E4M3_MAX = 224.0f;
 #elif HIP_FP8_TYPE_FNUZ
 using FP8_TYPE = c10::Float8_e4m3fnuz;
 constexpr auto FP8_E4M3_MAX = 224.0f;
