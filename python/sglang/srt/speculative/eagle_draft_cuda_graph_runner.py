@@ -396,6 +396,7 @@ class EAGLEDraftCudaGraphRunner:
         buffers.topk_p[:raw_bs].copy_(forward_batch.spec_info.topk_p)
         buffers.topk_index[:raw_bs].copy_(forward_batch.spec_info.topk_index)
         import logging as _logging
+
         _log = _logging.getLogger(__name__)
         _src = forward_batch.spec_info.hidden_states
         _log.info(
@@ -435,6 +436,7 @@ class EAGLEDraftCudaGraphRunner:
 
         # Replay
         import logging as _log2
+
         _log3 = _log2.getLogger(__name__)
         _oc = buffers.out_cache_loc
         _mr = self.model_runner
@@ -445,7 +447,7 @@ class EAGLEDraftCudaGraphRunner:
             f"out_cache_loc ptr=0x{_oc.data_ptr():x} shape={_oc.shape} "
             f"val_min={_oc[:raw_bs*self.num_tokens_per_bs*self.speculative_num_steps].min().item()} "
             f"val_max={_oc[:raw_bs*self.num_tokens_per_bs*self.speculative_num_steps].max().item()} "
-            f"kv_pool ptr=0x{_kv.kv_buffers[0].data_ptr():x} size={_kv.kv_buffers[0].shape} "
+            f"kv_pool k_buffer[0] ptr=0x{_kv.k_buffer[0].data_ptr():x} size={_kv.k_buffer[0].shape} "
             f"req_to_token ptr=0x{_rtp.data_ptr():x} shape={_rtp.shape}"
         )
         self._replay(forward_batch)
