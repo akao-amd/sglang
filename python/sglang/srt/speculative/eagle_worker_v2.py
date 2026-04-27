@@ -337,6 +337,11 @@ class EagleDraftWorker(BaseDraftWorker):
 
         # Run draft
         if can_cuda_graph:
+            # Diagnostic sync: ensure plan_stream has fully completed before replaying
+            # the draft cuda graph, to rule out a race between plan_stream buffer writes
+            # and the graph's captured buffer addresses.
+            if self.plan_stream:
+                self.plan_stream.synchronize()
             parent_list, top_scores_index, draft_tokens = self.cuda_graph_runner.replay(
                 forward_batch,
             )
