@@ -395,7 +395,17 @@ class EAGLEDraftCudaGraphRunner:
         buffers.positions[:raw_num_token].copy_(forward_batch.positions)
         buffers.topk_p[:raw_bs].copy_(forward_batch.spec_info.topk_p)
         buffers.topk_index[:raw_bs].copy_(forward_batch.spec_info.topk_index)
-        buffers.hidden_states[:raw_bs].copy_(forward_batch.spec_info.hidden_states)
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+        _src = forward_batch.spec_info.hidden_states
+        _log.info(
+            f"[XXX] hidden_states copy: "
+            f"src={_src.shape} ptr=0x{_src.data_ptr():x} "
+            f"dst={buffers.hidden_states.shape} ptr=0x{buffers.hidden_states.data_ptr():x}"
+        )
+        buffers.hidden_states[:raw_bs].copy_(_src)
+        torch.cuda.synchronize()
+        _log.info("[XXX] hidden_states copy done (sync passed)")
         buffers.req_pool_indices[:raw_bs].copy_(forward_batch.req_pool_indices)
 
         # TODO(ch-wan): support num_token_non_padded
@@ -424,6 +434,20 @@ class EAGLEDraftCudaGraphRunner:
         # TODO: The forward_batch.seq_len_sum might need to be updated to reflect the padding in the cuda graph
 
         # Replay
+        import logging as _log2
+        _log3 = _log2.getLogger(__name__)
+        _oc = buffers.out_cache_loc
+        _mr = self.model_runner
+        _kv = _mr.token_to_kv_pool
+        _rtp = _mr.req_to_token_pool.req_to_token
+        _log3.info(
+            f"[XXX] pre-replay bs={bs} raw_bs={raw_bs} "
+            f"out_cache_loc ptr=0x{_oc.data_ptr():x} shape={_oc.shape} "
+            f"val_min={_oc[:raw_bs*self.num_tokens_per_bs*self.speculative_num_steps].min().item()} "
+            f"val_max={_oc[:raw_bs*self.num_tokens_per_bs*self.speculative_num_steps].max().item()} "
+            f"kv_pool ptr=0x{_kv.kv_buffers[0].data_ptr():x} size={_kv.kv_buffers[0].shape} "
+            f"req_to_token ptr=0x{_rtp.data_ptr():x} shape={_rtp.shape}"
+        )
         self._replay(forward_batch)
         out = self.output_buffers[bs]
 
