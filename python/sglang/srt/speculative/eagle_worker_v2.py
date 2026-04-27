@@ -256,8 +256,12 @@ class EagleDraftWorker(BaseDraftWorker):
         self.cuda_graph_runner = None
         self.cuda_graph_runner_for_draft_extend = None
 
-        if self.server_args.disable_cuda_graph:
+        if self.server_args.speculative_disable_cuda_graph:
+            logger.info(
+                "[EagleDraftWorker] Skipping draft cuda graph capture (--speculative-disable-cuda-graph)."
+            )
             return
+        logger.info("[EagleDraftWorker] Capturing draft cuda graph.")
 
         if self.server_args.model_impl == "mindspore":
             return

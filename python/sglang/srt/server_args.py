@@ -520,6 +520,7 @@ class ServerArgs:
     speculative_draft_model_quantization: Optional[str] = None
     speculative_adaptive: bool = False
     speculative_adaptive_config: Optional[str] = None
+    speculative_disable_cuda_graph: bool = False
 
     # Speculative decoding (ngram)
     speculative_ngram_min_bfs_breadth: int = 1
@@ -5415,6 +5416,11 @@ class ServerArgs:
             type=str,
             help="Path to a JSON config file for adaptive speculative decoding tuning knobs ",
             default=ServerArgs.speculative_adaptive_config,
+        )
+        parser.add_argument(
+            "--speculative-disable-cuda-graph",
+            action="store_true",
+            help="Disable cuda graph capture for the draft model only. Has no effect on the target model.",
         )
 
         # Multi-layer Eagle speculative decoding
