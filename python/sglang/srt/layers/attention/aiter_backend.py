@@ -174,6 +174,12 @@ class AiterAttnBackend(AttentionBackend):
         # Parse constants
         self.max_context_len = model_runner.model_config.context_len
         self.skip_prefill = skip_prefill
+        # Track whether this backend instance is bound to a draft model
+        # runner (EAGLE3 / MTP). Used to gate FP8 KV-cache write fast paths
+        # whose Triton bf16->fp8 cast is not bit-exact with PyTorch
+        # .to(fp8); draft K/V is numerically sensitive to that drift
+        # because the next draft step reads back what was just written.
+        self.is_draft_worker = getattr(model_runner, "is_draft_worker", False)
 
         max_bs = model_runner.req_to_token_pool.size
 
@@ -2837,7 +2843,11 @@ class AiterAttnBackend(AttentionBackend):
                     k_scale=k_descale,
                     v_scale=v_descale,
                 )
-            elif self.use_triton_unified_attention and self.kv_cache_dtype == fp8_dtype:
+            elif (
+                self.use_triton_unified_attention
+                and self.kv_cache_dtype == fp8_dtype
+                and not self.is_draft_worker
+            ):
                 # [PATCH] FP8 non-SWA: use launch_reshape_and_cache_flash to
                 # fuse bf16→fp8 cast + paged write in one Triton kernel,
                 # eliminating separate float8_copy + store_kvcache overhead.
