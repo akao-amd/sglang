@@ -626,9 +626,14 @@ class KimiK25ForConditionalGeneration(nn.Module):
     # Support nvidia/Kimi-K2.5-NVFP4 naming: language_model.layers.*.
     # Ref: HF config.json for nvidia/Kimi-K2.5-NVFP4
     # https://huggingface.co/nvidia/Kimi-K2.5-NVFP4/blob/main/config.json
+    packed_modules_mapping = {
+        "fused_qkv_a_proj_with_mqa": ["q_a_proj", "kv_a_proj_with_mqa"],
+    }
     hf_to_sglang_mapper = WeightsMapper(
         orig_to_new_prefix={
-            "language_model.layers.": "language_model.model.layers.",
+            "language_model.layers.": "model.layers.",
+            "language_model.model.": "model.",
+            "language_model.": "",
         }
     )
 
