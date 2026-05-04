@@ -2173,6 +2173,8 @@ class DeepseekV2ForCausalLM(nn.Module, DeepseekV2WeightLoaderMixin):
                 "q_a_proj",
                 "kv_a_proj_with_mqa",
             ]
+        if quant_config and hasattr(quant_config, "packed_modules_mapping"):
+            quant_config.packed_modules_mapping = self.packed_modules_mapping
 
         self.pp_group = get_pp_group()
         self.config = config
