@@ -101,20 +101,12 @@ __global__ void per_token_quant_fp8_kernel(
     for (uint32_t j = 0; j < kVecSize; ++j) {
       float val = static_cast<float>(input_vec[j]) * scale_inv;
       val = fmaxf(fminf(val, FP8_E4M3_MAX), -FP8_E4M3_MAX);
-#if !defined(USE_ROCM)
-      // CUDA path
+#if !defined(USE_ROCM) || defined(HIP_FP8_TYPE_E4M3)
       output_arr[j] = static_cast<DST_DTYPE>(val);
 #else
-// ROCm path: Use device-side architecture detection for multi-arch support
-#if defined(__gfx942__)
-      // gfx942: Use E4M3FNUZ with special conversion
       output_arr[j] = c10::Float8_e4m3fnuz(
           __hip_cvt_float_to_fp8(val, fp8::fp8_type::__default_saturation, fp8::fp8_type::__default_interpret),
           c10::Float8_e4m3fnuz::from_bits());
-#else
-      // gfx950 and others: Use standard E4M3FN
-      output_arr[j] = static_cast<DST_DTYPE>(val);
-#endif
 #endif
     }
     if constexpr (kVecSize == 16) {
@@ -185,20 +177,12 @@ __global__ void per_token_quant_fp8_small_batch_kernel(
 #pragma unroll
     for (uint32_t j = 0; j < kVecSize; ++j) {
       float val = fmaxf(fminf(static_cast<float>(input_vec[j]) * scale_inv, FP8_E4M3_MAX), -FP8_E4M3_MAX);
-#if !defined(USE_ROCM)
-      // CUDA path
+#if !defined(USE_ROCM) || defined(HIP_FP8_TYPE_E4M3)
       output_arr[j] = static_cast<DST_DTYPE>(val);
 #else
-// ROCm path: Use device-side architecture detection for multi-arch support
-#if defined(__gfx942__)
-      // gfx942: Use E4M3FNUZ with special conversion
       output_arr[j] = c10::Float8_e4m3fnuz(
           __hip_cvt_float_to_fp8(val, fp8::fp8_type::__default_saturation, fp8::fp8_type::__default_interpret),
           c10::Float8_e4m3fnuz::from_bits());
-#else
-      // gfx950 and others: Use standard E4M3FN
-      output_arr[j] = static_cast<DST_DTYPE>(val);
-#endif
 #endif
     }
 
