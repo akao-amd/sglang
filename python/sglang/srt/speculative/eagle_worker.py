@@ -710,6 +710,8 @@ class EAGLEWorker(TpModelWorker):
         self._pending_draft_kv_restore = token_to_kv_pool_state_backup
 
     def _draft_preprocess_idle(self, batch: ScheduleBatch):
+        # Idle mode doesn't allocate draft KV slots, clear any pending restore
+        self._pending_draft_kv_restore = None
         batch.spec_info = EagleDraftInput.create_idle_input(
             device=self.device,
             hidden_size=self.model_config.hidden_size,
@@ -886,102 +888,111 @@ class EAGLEWorker(TpModelWorker):
         pass
 
     def verify(self, batch: ScheduleBatch, spec_info: EagleVerifyInput):
-        seq_lens_pre_verify = batch.seq_lens.clone()
-        spec_info.prepare_for_verify(batch, self.page_size)
-        spec_info.num_tokens_per_req = self.speculative_num_steps + 1
-        batch.return_hidden_states = False
-        batch.forward_mode = (
-            ForwardMode.TARGET_VERIFY
-            if not batch.forward_mode.is_idle()
-            else ForwardMode.IDLE
-        )
-        batch.spec_info = spec_info
-
-        model_worker_batch = batch.get_model_worker_batch(
-            seq_lens_cpu_cache=spec_info.seq_lens_cpu
-        )
-        assert model_worker_batch.capture_hidden_mode == spec_info.capture_hidden_mode
-
-        if batch.has_grammar:
-            retrieve_next_token_cpu = spec_info.retrieve_next_token.cpu()
-            retrieve_next_sibling_cpu = spec_info.retrieve_next_sibling.cpu()
-            draft_tokens_cpu = spec_info.draft_token.view(
-                spec_info.retrieve_next_token.shape
-            ).cpu()
-
-        # Forward
-        batch_result = self.target_worker.forward_batch_generation(
-            model_worker_batch, is_verify=True
-        )
-        logits_output, can_run_cuda_graph = (
-            batch_result.logits_output,
-            batch_result.can_run_cuda_graph,
-        )
-
-        # Restore draft KV slots now that verify forward is complete
-        if self._pending_draft_kv_restore is not None:
-            self.token_to_kv_pool_allocator.restore_state(
-                self._pending_draft_kv_restore
+        try:
+            seq_lens_pre_verify = batch.seq_lens.clone()
+            spec_info.prepare_for_verify(batch, self.page_size)
+            spec_info.num_tokens_per_req = self.speculative_num_steps + 1
+            batch.return_hidden_states = False
+            batch.forward_mode = (
+                ForwardMode.TARGET_VERIFY
+                if not batch.forward_mode.is_idle()
+                else ForwardMode.IDLE
             )
-            self._pending_draft_kv_restore = None
+            batch.spec_info = spec_info
 
-        vocab_mask = None
-        if batch.has_grammar:
-            # Generate the logit mask for structured output.
-            # Overlap the CPU operations for bitmask generation with the forward pass.
-            vocab_mask = generate_token_bitmask(
-                batch.reqs,
-                spec_info,
-                retrieve_next_token_cpu,
-                retrieve_next_sibling_cpu,
-                draft_tokens_cpu,
-                batch.sampling_info.vocab_size,
+            model_worker_batch = batch.get_model_worker_batch(
+                seq_lens_cpu_cache=spec_info.seq_lens_cpu
+            )
+            assert (
+                model_worker_batch.capture_hidden_mode == spec_info.capture_hidden_mode
             )
 
-            if vocab_mask is not None:
-                assert spec_info.grammar is not None
-                vocab_mask = vocab_mask.to(spec_info.retrieve_next_token.device)
-                # NOTE (sk): otherwise, this vocab mask will be the one from the previous extend stage
-                # and will be applied to produce wrong results
-                batch.sampling_info.vocab_mask = None
+            if batch.has_grammar:
+                retrieve_next_token_cpu = spec_info.retrieve_next_token.cpu()
+                retrieve_next_sibling_cpu = spec_info.retrieve_next_sibling.cpu()
+                draft_tokens_cpu = spec_info.draft_token.view(
+                    spec_info.retrieve_next_token.shape
+                ).cpu()
 
-        maybe_detect_nan(logits_output.next_token_logits, "verify: target model logits")
-
-        spec_info.hidden_states = logits_output.hidden_states
-        res: EagleVerifyOutput = spec_info.verify(
-            batch,
-            logits_output,
-            self.token_to_kv_pool_allocator,
-            self.page_size,
-            vocab_mask,
-        )
-
-        # Post process based on verified outputs.
-        # Pick indices that we care (accepted)
-        logits_output.next_token_logits = logits_output.next_token_logits[
-            res.accepted_indices
-        ]
-        logits_output.hidden_states = logits_output.hidden_states[res.accepted_indices]
-
-        if (
-            self.target_worker.model_runner.hybrid_gdn_config is not None
-            or self.target_worker.model_runner.mamba2_config is not None
-            or self.target_worker.model_runner.hybrid_lightning_config is not None
-        ):
-            self._mamba_verify_update(
-                batch, res, logits_output, spec_info, seq_lens_pre_verify
+            # Forward
+            batch_result = self.target_worker.forward_batch_generation(
+                model_worker_batch, is_verify=True
+            )
+            logits_output, can_run_cuda_graph = (
+                batch_result.logits_output,
+                batch_result.can_run_cuda_graph,
             )
 
-        if batch.return_logprob:
-            add_output_logprobs_for_spec_v1(batch, res, logits_output)
+            vocab_mask = None
+            if batch.has_grammar:
+                # Generate the logit mask for structured output.
+                # Overlap the CPU operations for bitmask generation with the forward pass.
+                vocab_mask = generate_token_bitmask(
+                    batch.reqs,
+                    spec_info,
+                    retrieve_next_token_cpu,
+                    retrieve_next_sibling_cpu,
+                    draft_tokens_cpu,
+                    batch.sampling_info.vocab_size,
+                )
 
-        # Prepare the batch for the next draft forwards.
-        batch.forward_mode = (
-            ForwardMode.DECODE if not batch.forward_mode.is_idle() else ForwardMode.IDLE
-        )
-        batch.spec_info = res.draft_input
+                if vocab_mask is not None:
+                    assert spec_info.grammar is not None
+                    vocab_mask = vocab_mask.to(spec_info.retrieve_next_token.device)
+                    # NOTE (sk): otherwise, this vocab mask will be the one from the previous extend stage
+                    # and will be applied to produce wrong results
+                    batch.sampling_info.vocab_mask = None
 
-        return logits_output, res, model_worker_batch, can_run_cuda_graph
+            maybe_detect_nan(
+                logits_output.next_token_logits, "verify: target model logits"
+            )
+
+            spec_info.hidden_states = logits_output.hidden_states
+            res: EagleVerifyOutput = spec_info.verify(
+                batch,
+                logits_output,
+                self.token_to_kv_pool_allocator,
+                self.page_size,
+                vocab_mask,
+            )
+
+            # Post process based on verified outputs.
+            # Pick indices that we care (accepted)
+            logits_output.next_token_logits = logits_output.next_token_logits[
+                res.accepted_indices
+            ]
+            logits_output.hidden_states = logits_output.hidden_states[
+                res.accepted_indices
+            ]
+
+            if (
+                self.target_worker.model_runner.hybrid_gdn_config is not None
+                or self.target_worker.model_runner.mamba2_config is not None
+                or self.target_worker.model_runner.hybrid_lightning_config is not None
+            ):
+                self._mamba_verify_update(
+                    batch, res, logits_output, spec_info, seq_lens_pre_verify
+                )
+
+            if batch.return_logprob:
+                add_output_logprobs_for_spec_v1(batch, res, logits_output)
+
+            # Prepare the batch for the next draft forwards.
+            batch.forward_mode = (
+                ForwardMode.DECODE
+                if not batch.forward_mode.is_idle()
+                else ForwardMode.IDLE
+            )
+            batch.spec_info = res.draft_input
+
+            return logits_output, res, model_worker_batch, can_run_cuda_graph
+        finally:
+            # CRITICAL: Always restore draft KV slots to prevent memory leak
+            if self._pending_draft_kv_restore is not None:
+                self.token_to_kv_pool_allocator.restore_state(
+                    self._pending_draft_kv_restore
+                )
+                self._pending_draft_kv_restore = None
 
     def _mamba_verify_update(
         self,
