@@ -120,6 +120,9 @@ class EAGLEWorker(TpModelWorker):
                 self, config_path=server_args.speculative_adaptive_config
             )
 
+        # Pending draft KV slot restore state (for deferred restore_state)
+        self._pending_draft_kv_restore = None
+
         # Override the context length of the draft model to be the same as the target model.
         server_args.context_length = target_worker.model_runner.model_config.context_len
 
@@ -703,7 +706,8 @@ class EAGLEWorker(TpModelWorker):
         batch.seq_lens_sum = torch.sum(batch.seq_lens).item()
         batch.return_hidden_states = False
         spec_info.positions = batch.seq_lens.repeat_interleave(self.topk, dim=0)
-        self.token_to_kv_pool_allocator.restore_state(token_to_kv_pool_state_backup)
+        # Defer restore_state until after verify completes to prevent KV slot collision
+        self._pending_draft_kv_restore = token_to_kv_pool_state_backup
 
     def _draft_preprocess_idle(self, batch: ScheduleBatch):
         batch.spec_info = EagleDraftInput.create_idle_input(
@@ -913,6 +917,13 @@ class EAGLEWorker(TpModelWorker):
             batch_result.logits_output,
             batch_result.can_run_cuda_graph,
         )
+
+        # Restore draft KV slots now that verify forward is complete
+        if self._pending_draft_kv_restore is not None:
+            self.token_to_kv_pool_allocator.restore_state(
+                self._pending_draft_kv_restore
+            )
+            self._pending_draft_kv_restore = None
 
         vocab_mask = None
         if batch.has_grammar:
