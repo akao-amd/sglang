@@ -420,13 +420,22 @@ class DeepseekMLAForwardMixin:
                 kv_cache_dtype = (
                     fp8_dtype if self.kv_cache_dtype == "fp8_e4m3" else q_nope_out.dtype
                 )
+                kv_cache_buf = get_token_to_kv_pool().get_key_buffer(
+                    self.attn_mqa.layer_id
+                )
+                slot_mapping = forward_batch.out_cache_loc
+                if not torch.cuda.is_current_stream_capturing():
+                    assert slot_mapping.max() < kv_cache_buf.shape[0], (
+                        f"slot_mapping OOB: max={slot_mapping.max().item()} "
+                        f">= kv_cache size={kv_cache_buf.shape[0]}"
+                    )
                 q_cat, _, k_pe_fused, _ = fused_qk_rope_cat_and_cache_mla(
                     q_nope_out,
                     q_pe,
                     k_nope,
                     k_pe,
-                    get_token_to_kv_pool().get_key_buffer(self.attn_mqa.layer_id),
-                    forward_batch.out_cache_loc,
+                    kv_cache_buf,
+                    slot_mapping,
                     positions,
                     cos,
                     sin,
@@ -514,13 +523,23 @@ class DeepseekMLAForwardMixin:
                     fp8_dtype if self.kv_cache_dtype == "fp8_e4m3" else q_nope_out.dtype
                 )
 
+                kv_cache_buf = get_token_to_kv_pool().get_key_buffer(
+                    self.attn_mqa.layer_id
+                )
+                slot_mapping = forward_batch.out_cache_loc
+                if not torch.cuda.is_current_stream_capturing():
+                    assert slot_mapping.max() < kv_cache_buf.shape[0], (
+                        f"slot_mapping OOB: max={slot_mapping.max().item()} "
+                        f">= kv_cache size={kv_cache_buf.shape[0]}"
+                    )
+
                 q, _, _, k = fused_qk_rope_cat_and_cache_mla(
                     q_nope_out,
                     q_pe,
                     k_nope,
                     k_pe,
-                    get_token_to_kv_pool().get_key_buffer(self.attn_mqa.layer_id),
-                    forward_batch.out_cache_loc,
+                    kv_cache_buf,
+                    slot_mapping,
                     positions,
                     cos,
                     sin,
