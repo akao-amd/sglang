@@ -93,10 +93,11 @@ tracing = [
 # HIP (Heterogeneous-computing Interface for Portability) for AMD
 # => base docker rocm/vllm-dev:20250114, not from public vllm whl
 srt_hip = [
-  # Pin to 0.15.0: 0.16.0 needs torch>=2.10 (incompatible with ROCm torch
-  # 2.9.1). An open-ended `<0.16.0` made pip backtrack into an unbuildable
-  # ancient setuptools sdist; an exact pin keeps the resolver converging.
-  "compressed-tensors==0.15.0",
+  # 0.16.0 needs torch>=2.10, satisfied by the ROCm torch 2.11 wheels this
+  # image installs. An exact pin (rather than an open-ended `<0.16.0` range)
+  # keeps pip's resolver converging instead of backtracking into an unbuildable
+  # ancient setuptools sdist.
+  "compressed-tensors==0.16.0",
   "petit_kernel==0.0.2",
   "sglang[runtime_common]",
   "torch",

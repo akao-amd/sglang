@@ -66,9 +66,9 @@ RUN python3 -m pip install --no-cache-dir -U pip setuptools setuptools_scm wheel
 ARG PIP_EXTRA_INDEX_URL="https://rocm.prereleases.amd.com/whl-multi-arch/"
 # Pin to a specific ROCm SDK version (e.g. 7.14.0a20260604). Leave empty for latest.
 ARG ROCM_SDK_VERSION="7.14.0rc1"
-ARG TORCH_VERSION="2.10.0"
-ARG TORCHVISION_VERSION="0.25.0"
-ARG TORCHAUDIO_VERSION="2.10.0"
+ARG TORCH_VERSION="2.11.0"
+ARG TORCHVISION_VERSION="0.26.0"
+ARG TORCHAUDIO_VERSION="2.11.0"
 
 # Install ROCm SDK
 RUN ROCM_SPEC="${ROCM_SDK_VERSION:+==${ROCM_SDK_VERSION}}" \
