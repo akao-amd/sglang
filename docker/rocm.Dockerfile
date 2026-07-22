@@ -103,8 +103,7 @@ ENV BUILD_TRITON="1"
 ENV BUILD_LLVM="0"
 ENV BUILD_AITER_ALL="1"
 ENV BUILD_MOONCAKE="1"
-# Workaround: Pull latest (up to 0630) for gfx1250 support
-ENV AITER_COMMIT_DEFAULT="8815f4b56dbaf416a3370659b777839c70ff3bf9"
+ENV AITER_COMMIT_DEFAULT="65e62ad6a6dac90b98d8c0f411f0a396690994fc"
 ENV TRITON_COMMIT_DEFAULT="c57bbbd8c1d83a8388baa508cf1286bfdad1695d"
 ENV MORI_COMMIT_DEFAULT="e31d426a13e96e1cbff96a1c904d291aefe8c46a"
 
@@ -174,7 +173,7 @@ ARG SETUPTOOLS_SCM_PRETEND_VERSION=""
 ARG TRITON_REPO="https://github.com/triton-lang/triton.git"
 ENV TRITON_COMMIT="${TRITON_COMMIT:-${TRITON_COMMIT_DEFAULT}}"
 
-ARG AITER_REPO="https://github.com/akao-amd/aiter.git"
+ARG AITER_REPO="https://github.com/rocm/aiter.git"
 ARG AITER_COMMIT=""
 ENV AITER_COMMIT="${AITER_COMMIT:-${AITER_COMMIT_DEFAULT}}"
 
@@ -340,9 +339,9 @@ RUN pip uninstall -y aiter
 # block switching to commits that predate that rule (e.g. the current default
 # AITER_COMMIT_DEFAULT). The working tree was just produced by a fresh
 # `git clone` above, so there are no real user changes to preserve.
-# gfx1250-hot-fix: not specifying exact commit to have akao-amd/aiter HEAD
 RUN git clone ${AITER_REPO} \
  && cd aiter \
+ && git checkout -f ${AITER_COMMIT} \
  && git submodule update --init --recursive \
  && pip install -r requirements.txt
 
