@@ -51,18 +51,21 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN python3 -m pip install --no-cache-dir -U pip setuptools setuptools_scm wheel
 
 # Version pins — override with --build-arg to update
-ARG ROCM_VERSION="7.15.0a20260712"
-ARG INDEX_URL="https://rocm.nightlies.amd.com/whl-multi-arch/"
-ARG PIP_EXTRA_INDEX_URL="https://rocm.devreleases.amd.com/whl-multi-arch/"
+ARG ROCM_VERSION="7.14.0"
+ARG INDEX_URL="https://repo.amd.com/rocm/whl-multi-arch/"
+# ARG PIP_EXTRA_INDEX_URL="https://rocm.devreleases.amd.com/whl-multi-arch/"
 ARG TORCH_VERSION="2.11.0"
 ARG TORCHVISION_VERSION="0.26.0"
 ARG TRITON_VERSION="3.7.1+git0263a6a6"
 
 # ROCm SDK + PyTorch stack — single pip install, single index.
+#    --extra-index-url ${PIP_EXTRA_INDEX_URL}
 RUN python3 -m pip install --no-cache-dir --pre \
     --index-url ${INDEX_URL} \
-    --extra-index-url ${PIP_EXTRA_INDEX_URL} \
-    "rocm[libraries,devel,device-gfx1250]==${ROCM_VERSION}" \
+    "rocm-sdk-core==${ROCM_VERSION}" \
+    "rocm-sdk-libraries==${ROCM_VERSION}" \
+    "rocm-sdk-devel==${ROCM_VERSION}" \
+    "rocm-sdk-device-gfx1250==${ROCM_VERSION}" \
     "torch[device-gfx1250]==${TORCH_VERSION}+rocm${ROCM_VERSION}" \
     "torchvision[device-gfx1250]==${TORCHVISION_VERSION}+rocm${ROCM_VERSION}" \
     "torchaudio==${TORCH_VERSION}+rocm${ROCM_VERSION}" \
