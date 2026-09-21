@@ -145,108 +145,99 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
 
     # load initial state
     if USE_INITIAL_STATE and valid_state:
-        p_h0_1 = tl.make_block_ptr(h0, (V, K), (K, 1), (i_v * BV, 0), (BV, 64), (1, 0))
-        b_h1 += tl.load(p_h0_1, boundary_check=(0, 1)).to(tl.float32)
+        o_vh0 = i_v * BV + tl.arange(0, BV)
+        o_k1 = tl.arange(0, 64)
+        m_h0_1 = (o_vh0 < V)[:, None] & (o_k1 < K)[None, :]
+        b_h1 += tl.load(h0 + o_vh0[:, None] * K + o_k1[None, :], mask=m_h0_1, other=0.0).to(tl.float32)
         if K > 64:
-            p_h0_2 = tl.make_block_ptr(
-                h0, (V, K), (K, 1), (i_v * BV, 64), (BV, 64), (1, 0)
-            )
-            b_h2 += tl.load(p_h0_2, boundary_check=(0, 1)).to(tl.float32)
+            o_k2 = 64 + tl.arange(0, 64)
+            m_h0_2 = (o_vh0 < V)[:, None] & (o_k2 < K)[None, :]
+            b_h2 += tl.load(h0 + o_vh0[:, None] * K + o_k2[None, :], mask=m_h0_2, other=0.0).to(tl.float32)
         if K > 128:
-            p_h0_3 = tl.make_block_ptr(
-                h0, (V, K), (K, 1), (i_v * BV, 128), (BV, 64), (1, 0)
-            )
-            b_h3 += tl.load(p_h0_3, boundary_check=(0, 1)).to(tl.float32)
+            o_k3 = 128 + tl.arange(0, 64)
+            m_h0_3 = (o_vh0 < V)[:, None] & (o_k3 < K)[None, :]
+            b_h3 += tl.load(h0 + o_vh0[:, None] * K + o_k3[None, :], mask=m_h0_3, other=0.0).to(tl.float32)
         if K > 192:
-            p_h0_4 = tl.make_block_ptr(
-                h0, (V, K), (K, 1), (i_v * BV, 192), (BV, 64), (1, 0)
-            )
-            b_h4 += tl.load(p_h0_4, boundary_check=(0, 1)).to(tl.float32)
+            o_k4 = 192 + tl.arange(0, 64)
+            m_h0_4 = (o_vh0 < V)[:, None] & (o_k4 < K)[None, :]
+            b_h4 += tl.load(h0 + o_vh0[:, None] * K + o_k4[None, :], mask=m_h0_4, other=0.0).to(tl.float32)
 
     # main recurrence
     for i_t in range(NT):
-        p_h1 = tl.make_block_ptr(
-            h + i_t * stride_h, (V, K), (K, 1), (i_v * BV, 0), (BV, 64), (1, 0)
-        )
-        tl.store(p_h1, b_h1.to(p_h1.dtype.element_ty), boundary_check=(0, 1))
+        # store h tiles: shape (V,K), row-stride=K, col-stride=1
+        o_vh = i_v * BV + tl.arange(0, BV)
+        o_k1 = tl.arange(0, 64)
+        m_h1 = (o_vh < V)[:, None] & (o_k1 < K)[None, :]
+        p_h1 = h + i_t * stride_h + o_vh[:, None] * K + o_k1[None, :]
+        tl.store(p_h1, b_h1.to(v.dtype.element_ty), mask=m_h1)
         if K > 64:
-            p_h2 = tl.make_block_ptr(
-                h + i_t * stride_h, (V, K), (K, 1), (i_v * BV, 64), (BV, 64), (1, 0)
-            )
-            tl.store(p_h2, b_h2.to(p_h2.dtype.element_ty), boundary_check=(0, 1))
+            o_k2 = 64 + tl.arange(0, 64)
+            m_h2 = (o_vh < V)[:, None] & (o_k2 < K)[None, :]
+            p_h2 = h + i_t * stride_h + o_vh[:, None] * K + o_k2[None, :]
+            tl.store(p_h2, b_h2.to(v.dtype.element_ty), mask=m_h2)
         if K > 128:
-            p_h3 = tl.make_block_ptr(
-                h + i_t * stride_h, (V, K), (K, 1), (i_v * BV, 128), (BV, 64), (1, 0)
-            )
-            tl.store(p_h3, b_h3.to(p_h3.dtype.element_ty), boundary_check=(0, 1))
+            o_k3 = 128 + tl.arange(0, 64)
+            m_h3 = (o_vh < V)[:, None] & (o_k3 < K)[None, :]
+            p_h3 = h + i_t * stride_h + o_vh[:, None] * K + o_k3[None, :]
+            tl.store(p_h3, b_h3.to(v.dtype.element_ty), mask=m_h3)
         if K > 192:
-            p_h4 = tl.make_block_ptr(
-                h + i_t * stride_h, (V, K), (K, 1), (i_v * BV, 192), (BV, 64), (1, 0)
-            )
-            tl.store(p_h4, b_h4.to(p_h4.dtype.element_ty), boundary_check=(0, 1))
+            o_k4 = 192 + tl.arange(0, 64)
+            m_h4 = (o_vh < V)[:, None] & (o_k4 < K)[None, :]
+            p_h4 = h + i_t * stride_h + o_vh[:, None] * K + o_k4[None, :]
+            tl.store(p_h4, b_h4.to(v.dtype.element_ty), mask=m_h4)
 
         if TRACK_STATE and i_t == i_track:
-            p_t1 = tl.make_block_ptr(
-                p_track_base, (V, K), (K, 1), (i_v * BV, 0), (BV, 64), (1, 0)
-            )
-            tl.store(p_t1, b_h1, boundary_check=(0, 1))
+            o_vt = i_v * BV + tl.arange(0, BV)
+            o_kt1 = tl.arange(0, 64)
+            m_t1 = (o_vt < V)[:, None] & (o_kt1 < K)[None, :]
+            tl.store(p_track_base + o_vt[:, None] * K + o_kt1[None, :], b_h1, mask=m_t1)
             if K > 64:
-                p_t2 = tl.make_block_ptr(
-                    p_track_base, (V, K), (K, 1), (i_v * BV, 64), (BV, 64), (1, 0)
-                )
-                tl.store(p_t2, b_h2, boundary_check=(0, 1))
+                o_kt2 = 64 + tl.arange(0, 64)
+                m_t2 = (o_vt < V)[:, None] & (o_kt2 < K)[None, :]
+                tl.store(p_track_base + o_vt[:, None] * K + o_kt2[None, :], b_h2, mask=m_t2)
             if K > 128:
-                p_t3 = tl.make_block_ptr(
-                    p_track_base, (V, K), (K, 1), (i_v * BV, 128), (BV, 64), (1, 0)
-                )
-                tl.store(p_t3, b_h3, boundary_check=(0, 1))
+                o_kt3 = 128 + tl.arange(0, 64)
+                m_t3 = (o_vt < V)[:, None] & (o_kt3 < K)[None, :]
+                tl.store(p_track_base + o_vt[:, None] * K + o_kt3[None, :], b_h3, mask=m_t3)
             if K > 192:
-                p_t4 = tl.make_block_ptr(
-                    p_track_base, (V, K), (K, 1), (i_v * BV, 192), (BV, 64), (1, 0)
-                )
-                tl.store(p_t4, b_h4, boundary_check=(0, 1))
+                o_kt4 = 192 + tl.arange(0, 64)
+                m_t4 = (o_vt < V)[:, None] & (o_kt4 < K)[None, :]
+                tl.store(p_track_base + o_vt[:, None] * K + o_kt4[None, :], b_h4, mask=m_t4)
 
-        p_w = tl.make_block_ptr(
-            w, (T, K), (stride_w, 1), (i_t * BT, 0), (BT, 64), (1, 0)
-        )
-        b_w = tl.load(p_w, boundary_check=(0, 1))
+        # load w tiles: shape (BT, 64), row-stride=stride_w, col-stride=1
+        o_wt = i_t * BT + tl.arange(0, BT)
+        o_wk1 = tl.arange(0, 64)
+        m_w1 = (o_wt < T)[:, None] & (o_wk1 < K)[None, :]
+        b_w = tl.load(w + o_wt[:, None] * stride_w + o_wk1[None, :], mask=m_w1, other=0.0)
         b_v = tl.dot(b_w, tl.trans(b_h1).to(b_w.dtype))
         if K > 64:
-            p_w = tl.make_block_ptr(
-                w, (T, K), (stride_w, 1), (i_t * BT, 64), (BT, 64), (1, 0)
-            )
-            b_w = tl.load(p_w, boundary_check=(0, 1))
+            o_wk2 = 64 + tl.arange(0, 64)
+            m_w2 = (o_wt < T)[:, None] & (o_wk2 < K)[None, :]
+            b_w = tl.load(w + o_wt[:, None] * stride_w + o_wk2[None, :], mask=m_w2, other=0.0)
             b_v += tl.dot(b_w, tl.trans(b_h2).to(b_w.dtype))
         if K > 128:
-            p_w = tl.make_block_ptr(
-                w, (T, K), (stride_w, 1), (i_t * BT, 128), (BT, 64), (1, 0)
-            )
-            b_w = tl.load(p_w, boundary_check=(0, 1))
+            o_wk3 = 128 + tl.arange(0, 64)
+            m_w3 = (o_wt < T)[:, None] & (o_wk3 < K)[None, :]
+            b_w = tl.load(w + o_wt[:, None] * stride_w + o_wk3[None, :], mask=m_w3, other=0.0)
             b_v += tl.dot(b_w, tl.trans(b_h3).to(b_w.dtype))
         if K > 192:
-            p_w = tl.make_block_ptr(
-                w, (T, K), (stride_w, 1), (i_t * BT, 192), (BT, 64), (1, 0)
-            )
-            b_w = tl.load(p_w, boundary_check=(0, 1))
+            o_wk4 = 192 + tl.arange(0, 64)
+            m_w4 = (o_wt < T)[:, None] & (o_wk4 < K)[None, :]
+            b_w = tl.load(w + o_wt[:, None] * stride_w + o_wk4[None, :], mask=m_w4, other=0.0)
             b_v += tl.dot(b_w, tl.trans(b_h4).to(b_w.dtype))
-        p_v = tl.make_block_ptr(
-            v, (T, V), (stride_v, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0)
-        )
-        b_v = tl.load(p_v, boundary_check=(0, 1)) - b_v
+        # load v tiles: shape (BT, BV), row-stride=stride_v, col-stride=1
+        o_vv = i_v * BV + tl.arange(0, BV)
+        m_vv = (o_wt < T)[:, None] & (o_vv < V)[None, :]
+        b_v = tl.load(v + o_wt[:, None] * stride_v + o_vv[None, :], mask=m_vv, other=0.0) - b_v
 
         if SAVE_NEW_VALUE:
-            p_v = tl.make_block_ptr(
-                v_new, (T, V), (stride_v, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0)
-            )
-            tl.store(p_v, b_v.to(p_v.dtype.element_ty), boundary_check=(0, 1))
+            tl.store(v_new + o_wt[:, None] * stride_v + o_vv[None, :], b_v.to(v.dtype.element_ty), mask=m_vv)
 
         last_idx = min((i_t + 1) * BT, T) - 1
         if USE_G:
             b_g_last = tl.load(g + bos * H + last_idx * H + i_h)
-            p_g = tl.make_block_ptr(
-                g + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,)
-            )
-            b_g = tl.load(p_g, boundary_check=(0,))
+            o_gt = i_t * BT + tl.arange(0, BT)
+            b_g = tl.load(g + bos * H + i_h + o_gt * H, mask=o_gt < T, other=0.0)
             b_v = b_v * safe_exp(b_g_last - b_g)[:, None]
             b_g_last = exp(b_g_last)
             b_h1 = b_h1 * b_g_last
@@ -303,49 +294,55 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
                     b_h4 *= exp(b_gk_last4)[None, :]
         b_v = b_v.to(k.dtype.element_ty)
 
-        p_k = tl.make_block_ptr(
-            k, (K, T), (1, stride_k), (0, i_t * BT), (64, BT), (0, 1)
-        )
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        # load k tiles: shape (K,T), row-stride=1, col-stride=stride_k
+        o_kt = i_t * BT + tl.arange(0, BT)
+        o_kk1 = tl.arange(0, 64)
+        m_k1 = (o_kk1 < K)[:, None] & (o_kt < T)[None, :]
+        p_k = k + o_kk1[:, None] * 1 + o_kt[None, :] * stride_k
+        b_k = tl.load(p_k, mask=m_k1, other=0.0)
         b_h1 += tl.trans(tl.dot(b_k, b_v))
         if K > 64:
-            p_k = tl.make_block_ptr(
-                k, (K, T), (1, stride_k), (64, i_t * BT), (64, BT), (0, 1)
-            )
-            b_k = tl.load(p_k, boundary_check=(0, 1))
+            o_kk2 = 64 + tl.arange(0, 64)
+            m_k2 = (o_kk2 < K)[:, None] & (o_kt < T)[None, :]
+            p_k = k + o_kk2[:, None] * 1 + o_kt[None, :] * stride_k
+            b_k = tl.load(p_k, mask=m_k2, other=0.0)
             b_h2 += tl.trans(tl.dot(b_k, b_v))
         if K > 128:
-            p_k = tl.make_block_ptr(
-                k, (K, T), (1, stride_k), (128, i_t * BT), (64, BT), (0, 1)
-            )
-            b_k = tl.load(p_k, boundary_check=(0, 1))
+            o_kk3 = 128 + tl.arange(0, 64)
+            m_k3 = (o_kk3 < K)[:, None] & (o_kt < T)[None, :]
+            p_k = k + o_kk3[:, None] * 1 + o_kt[None, :] * stride_k
+            b_k = tl.load(p_k, mask=m_k3, other=0.0)
             b_h3 += tl.trans(tl.dot(b_k, b_v))
         if K > 192:
-            p_k = tl.make_block_ptr(
-                k, (K, T), (1, stride_k), (192, i_t * BT), (64, BT), (0, 1)
-            )
-            b_k = tl.load(p_k, boundary_check=(0, 1))
+            o_kk4 = 192 + tl.arange(0, 64)
+            m_k4 = (o_kk4 < K)[:, None] & (o_kt < T)[None, :]
+            p_k = k + o_kk4[:, None] * 1 + o_kt[None, :] * stride_k
+            b_k = tl.load(p_k, mask=m_k4, other=0.0)
             b_h4 += tl.trans(tl.dot(b_k, b_v))
 
     # epilogue
     if INPLACE_UPDATE and valid_state:
-        p_ht = tl.make_block_ptr(ht, (V, K), (K, 1), (i_v * BV, 0), (BV, 64), (1, 0))
-        tl.store(p_ht, b_h1.to(p_ht.dtype.element_ty), boundary_check=(0, 1))
+        # store ht tiles: shape (V,K), row-stride=K, col-stride=1
+        o_vht = i_v * BV + tl.arange(0, BV)
+        o_k1 = tl.arange(0, 64)
+        m_ht1 = (o_vht < V)[:, None] & (o_k1 < K)[None, :]
+        p_ht = ht + o_vht[:, None] * K + o_k1[None, :]
+        tl.store(p_ht, b_h1.to(v.dtype.element_ty), mask=m_ht1)
         if K > 64:
-            p_ht = tl.make_block_ptr(
-                ht, (V, K), (K, 1), (i_v * BV, 64), (BV, 64), (1, 0)
-            )
-            tl.store(p_ht, b_h2.to(p_ht.dtype.element_ty), boundary_check=(0, 1))
+            o_k2 = 64 + tl.arange(0, 64)
+            m_ht2 = (o_vht < V)[:, None] & (o_k2 < K)[None, :]
+            p_ht = ht + o_vht[:, None] * K + o_k2[None, :]
+            tl.store(p_ht, b_h2.to(v.dtype.element_ty), mask=m_ht2)
         if K > 128:
-            p_ht = tl.make_block_ptr(
-                ht, (V, K), (K, 1), (i_v * BV, 128), (BV, 64), (1, 0)
-            )
-            tl.store(p_ht, b_h3.to(p_ht.dtype.element_ty), boundary_check=(0, 1))
+            o_k3 = 128 + tl.arange(0, 64)
+            m_ht3 = (o_vht < V)[:, None] & (o_k3 < K)[None, :]
+            p_ht = ht + o_vht[:, None] * K + o_k3[None, :]
+            tl.store(p_ht, b_h3.to(v.dtype.element_ty), mask=m_ht3)
         if K > 192:
-            p_ht = tl.make_block_ptr(
-                ht, (V, K), (K, 1), (i_v * BV, 192), (BV, 64), (1, 0)
-            )
-            tl.store(p_ht, b_h4.to(p_ht.dtype.element_ty), boundary_check=(0, 1))
+            o_k4 = 192 + tl.arange(0, 64)
+            m_ht4 = (o_vht < V)[:, None] & (o_k4 < K)[None, :]
+            p_ht = ht + o_vht[:, None] * K + o_k4[None, :]
+            tl.store(p_ht, b_h4.to(v.dtype.element_ty), mask=m_ht4)
 
 
 def chunk_gated_delta_rule_fwd_h(

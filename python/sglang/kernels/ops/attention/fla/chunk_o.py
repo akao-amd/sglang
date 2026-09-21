@@ -78,22 +78,23 @@ def chunk_fwd_kernel_o(
     b_o = tl.zeros([BT, BV], dtype=tl.float32)
     b_A = tl.zeros([BT, BT], dtype=tl.float32)
 
+    _o_t = i_t * BT + tl.arange(0, BT)
+
     for i_k in range(tl.cdiv(K, BK)):
-        p_q = tl.make_block_ptr(
-            q, (T, K), (Hg * K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0)
-        )
-        p_k = tl.make_block_ptr(
-            k, (K, T), (1, Hg * K), (i_k * BK, i_t * BT), (BK, BT), (0, 1)
-        )
-        p_h = tl.make_block_ptr(
-            h, (V, K), (K, 1), (i_v * BV, i_k * BK), (BV, BK), (1, 0)
-        )
+        _o_k = i_k * BK + tl.arange(0, BK)
         # [BT, BK]
-        b_q = tl.load(p_q, boundary_check=(0, 1))
-        # [BK, BT]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        _m_q = (_o_t < T)[:, None] & (_o_k < K)[None, :]
+        _p_q = q + _o_t[:, None] * (Hg * K) + _o_k[None, :]
+        b_q = tl.load(_p_q, mask=_m_q, other=0.0)
+        # [BK, BT]  (k transposed: rows=K cols=T)
+        _m_k = (_o_k < K)[:, None] & (_o_t < T)[None, :]
+        _p_k = k + _o_k[:, None] + _o_t[None, :] * (Hg * K)
+        b_k = tl.load(_p_k, mask=_m_k, other=0.0)
         # [BV, BK]
-        b_h = tl.load(p_h, boundary_check=(0, 1))
+        _o_v = i_v * BV + tl.arange(0, BV)
+        _m_h = (_o_v < V)[:, None] & (_o_k < K)[None, :]
+        _p_h = h + _o_v[:, None] * K + _o_k[None, :]
+        b_h = tl.load(_p_h, mask=_m_h, other=0.0)
 
         # [BT, BK] @ [BK, BV] -> [BT, BV]
         b_o += tl.dot(b_q, tl.trans(b_h))
@@ -102,8 +103,9 @@ def chunk_fwd_kernel_o(
 
     if USE_G:
         g += bos * H + i_h
-        p_g = tl.make_block_ptr(g, (T,), (H,), (i_t * BT,), (BT,), (0,))
-        b_g = tl.load(p_g, boundary_check=(0,))
+        _m_g = _o_t < T
+        _p_g = g + _o_t * H
+        b_g = tl.load(_p_g, mask=_m_g, other=0.0)
         b_o = b_o * exp(b_g)[:, None]
         b_A = b_A * safe_exp(b_g[:, None] - b_g[None, :])
 
@@ -111,18 +113,16 @@ def chunk_fwd_kernel_o(
     m_A = o_i[:, None] >= o_i[None, :]
     b_A = tl.where(m_A, b_A, 0)
 
-    p_v = tl.make_block_ptr(
-        v, (T, V), (H * V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0)
-    )
-    p_o = tl.make_block_ptr(
-        o, (T, V), (H * V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0)
-    )
-    b_v = tl.load(p_v, boundary_check=(0, 1))
+    _o_vv = i_v * BV + tl.arange(0, BV)
+    _m_vo = (_o_t < T)[:, None] & (_o_vv < V)[None, :]
+    _p_v = v + _o_t[:, None] * (H * V) + _o_vv[None, :]
+    _p_o = o + _o_t[:, None] * (H * V) + _o_vv[None, :]
+    b_v = tl.load(_p_v, mask=_m_vo, other=0.0)
 
     # to fix mma -> mma layout conversion
     # already solved by triton v3.2 or higher
     b_o = b_o * scale + tl.dot(b_A.to(b_v.dtype), b_v) * scale
-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
+    tl.store(_p_o, b_o.to(v.dtype.element_ty), mask=_m_vo)
 
 
 def chunk_fwd_o(

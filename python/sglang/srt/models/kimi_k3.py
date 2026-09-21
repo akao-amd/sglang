@@ -467,7 +467,6 @@ class KimiK3MoE(nn.Module):
             moe_quant_config = Mxfp4Config(is_checkpoint_mxfp4_serialized=True)
 
         # Routed experts (operate in moe_hidden_size space)
-        # gate_up_interleaved=False: K3 loads per-expert w1/w3 into non-interleaved layout
         self.experts = get_moe_impl_class(moe_quant_config)(
             num_experts=getattr(config, "n_routed_experts", config.num_experts),
             top_k=config.num_experts_per_token,
@@ -479,7 +478,7 @@ class KimiK3MoE(nn.Module):
             activation=config.hidden_act,
             gemm1_alpha=config.activation_situ_beta,
             gemm1_clamp_limit=config.activation_situ_linear_beta,
-            gate_up_interleaved=False,
+            gate_up_interleaved=True,
             # trtllm fused-routing MoE backends (e.g. nvfp4 w4a4) route inside
             # the kernel and require the routing method; K3 uses DSv3-style
             # grouped topk with e_score_correction_bias.
