@@ -5,6 +5,11 @@ from typing import Optional
 import torch
 
 from sglang.srt.environ import envs
+from sglang.srt.utils.common import (
+    get_bool_env_var,
+    is_gfx1250_supported,
+    is_hip,
+)
 
 _linear_bf16_fp32_algo = envs.SGLANG_OPT_BF16_FP32_GEMM_ALGO.get()
 _HPC_GEMM_WEIGHT_CACHE_ATTR = "_sglang_bf16xfp32_weight_cache"
@@ -134,12 +139,68 @@ def _linear_bf16_fp32_hpc(
     )
 
 
+@functools.cache
+def _aiter_gluon_a16w16():
+    """AITER's gluon ``a16w16`` GEMM, or None when it must not be used.
+
+    gfx1250 only. hipBLASLt has no tuned bf16 kernel for this arch, so
+    ``torch.mm(..., out_dtype=torch.float32)`` lands on a ``MT256x128x64``
+    macro-tile for GEMMs whose M is a decode batch -- ~316 us against ~9.8 us for
+    this kernel, measured in a DeepSeek-V4-Flash decode trace at conc=8 (an
+    isolated microbenchmark of the same two kernels reads ~220 us vs ~4 us, but
+    its weight stays cache-resident, so the in-situ figure is the honest one).
+    AITER says the same thing in ``tuned_gemm.py``: "gfx1250 has no tuned
+    ASM/skinny/hipblaslt bf16 kernels, so the torch fallback lands on hipBLASLt,
+    which is markedly slower than the Triton (gluon) a16w16 kernel".
+
+    Called directly rather than through ``aiter.tuned_gemm.tgemm``, which on
+    gfx1250 resolves an untuned bf16 shape to this same kernel. Two reasons to
+    name it instead of asking for it: it keeps a CSV lookup, a cu-count query and
+    the dispatcher off the path of a ~10 us kernel; and it is not subject to
+    AITER's own caveat about that fallback -- "explicit tuned CSV entries still
+    win since they are matched before this fallback is reached" -- so a gfx1250
+    row added later naming a backend that allocates its output at the *input*
+    dtype would silently round an fp32 request. The gluon kernel accumulates in
+    fp32 and stores the accumulator, so ``dtype`` is a request for precision
+    rather than a cast.
+
+    The import and the arch query happen on the first call; Triton compiles a
+    kernel per (N, K) and M-bucket as those are first seen.
+    """
+    if not (get_bool_env_var("SGLANG_USE_AITER") and is_hip()):
+        return None
+    if not is_gfx1250_supported():
+        return None
+    try:
+        from aiter.ops.triton.gemm.basic.gemm_a16w16 import gemm_a16w16
+    except ImportError:
+        return None
+    return gemm_a16w16
+
+
 def linear_bf16_fp32(
     x: torch.Tensor,
     y: torch.Tensor,
     *,
     hpc_kernel_min_m: Optional[int] = None,
 ) -> torch.Tensor:
+    # Preconditions are a strict subset of _linear_bf16_fp32_cublas's fast arm
+    # (which does not check rank), so this branch never takes a case the fallback
+    # would have handled differently; the rank checks matter because the AITER
+    # entry point would reshape a 3-D input rather than decline it.
+    # Ordered first, as the pre-#41019 AITER branch was: on gfx1250 the "hpc"
+    # algo is unreachable (it needs device capability 9), so the only setting
+    # this preempts is an explicit SGLANG_OPT_BF16_FP32_GEMM_ALGO=deep_gemm.
+    if (
+        x.is_cuda
+        and x.dim() == 2
+        and y.dim() == 2
+        and x.dtype == torch.bfloat16
+        and y.dtype == torch.bfloat16
+    ):
+        gemm_a16w16 = _aiter_gluon_a16w16()
+        if gemm_a16w16 is not None:
+            return gemm_a16w16(x, y, dtype=torch.float32)
     if hpc_kernel_min_m is not None:
         output = _linear_bf16_fp32_hpc(x, y, min_m=hpc_kernel_min_m)
         if output is not None:
