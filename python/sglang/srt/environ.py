@@ -907,6 +907,10 @@ class Envs:
     # AMD, ROCm, and AITER
     # ===================================================================
     SGLANG_USE_AITER = EnvBool(False)
+    # Run the unquantized LM head through aiter's tuned tgemm instead of F.linear
+    # (needs SGLANG_USE_AITER). On gfx1250, hipBLASLt picks an untuned tile for
+    # the GPT-OSS LM head that is ~2.2x slower.
+    SGLANG_LM_HEAD_AITER_TGEMM = EnvBool(False)
     # DeepSeek-V4 in-tree copies of open aiter tuning PRs, each applied only while the
     # pinned aiter still ships the pre-PR config (see
     # models/deepseek_common/amd/aiter_intree_tune.py). 0 = use aiter as is.
