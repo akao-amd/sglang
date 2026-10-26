@@ -15,6 +15,7 @@
 
 import dataclasses
 import logging
+import os
 from contextlib import contextmanager
 from enum import IntEnum
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -69,7 +70,9 @@ from sglang.srt.runtime_context import (
     get_parallel,
 )
 from sglang.srt.utils.common import (
+    get_bool_env_var,
     is_cpu,
+    is_hip,
     is_npu,
     is_pin_memory_available,
     use_intel_amx_backend,
@@ -79,6 +82,76 @@ logger = logging.getLogger(__name__)
 
 _is_npu = is_npu()
 _is_cpu = is_cpu()
+
+# gfx1250 gpt-oss LM head: torch.matmul picks hipBLASLt MT256x256x128 at decode M=16 (~1 ms per
+# step at vocab 201088 x 2880). SGLANG_GFX1250_LM_HEAD_TGEMM=1 routes the bf16 LM head through
+# aiter tgemm, whose untuned gfx1250 bf16 fallback is the Gluon a16w16 GEMM. Default off.
+_lm_head_tgemm = None
+if (
+    is_hip()
+    and get_bool_env_var("SGLANG_USE_AITER")
+    and get_bool_env_var("SGLANG_GFX1250_LM_HEAD_TGEMM")
+):
+    from aiter.tuned_gemm import tgemm as _lm_head_tgemm
+
+# One post-return receipt per process when the flag is set explicitly (A arms "0", B "1"): which LM-head branch
+# actually ran, eagerly (never during graph capture). Allowlisted fields only; no tensor data, no sync.
+_lm_head_receipt_flag = os.environ.get("SGLANG_GFX1250_LM_HEAD_TGEMM")
+_lm_head_receipt_done = False
+
+
+def _lm_head_receipt(
+    branch: str, hidden_states: torch.Tensor, weight: torch.Tensor
+) -> None:
+    global _lm_head_receipt_done
+    if _lm_head_receipt_done or _lm_head_receipt_flag is None:
+        return
+    if hidden_states.is_cuda and torch.cuda.is_current_stream_capturing():
+        return
+    _lm_head_receipt_done = True
+    import hashlib
+    import json
+    import sys
+
+    def _sha(path):
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+
+    rec = {
+        "pid": os.getpid(),
+        "flag": _lm_head_receipt_flag,
+        "branch": branch,
+        "x_shape": list(hidden_states.shape),
+        "x_dtype": str(hidden_states.dtype),
+        "w_shape": list(weight.shape),
+        "w_dtype": str(weight.dtype),
+        "logits_processor": __file__,
+        "logits_processor_sha256": _sha(__file__),
+    }
+    if branch == "tgemm.mm":
+        import aiter.tuned_gemm as _tg
+
+        cfg = _tg.get_GEMM_A16W16_config(
+            M=hidden_states.shape[0],
+            N=weight.shape[0],
+            K=weight.shape[1],
+            bias=False,
+            dtype=str(hidden_states.dtype),
+            otype=str(torch.bfloat16),
+            scaleAB=False,
+            bpreshuffle=False,
+        )
+        rec.update(
+            tuned_gemm=_tg.__file__,
+            tuned_gemm_sha256=_sha(_tg.__file__),
+            libtype=cfg["libtype"],
+        )
+    print(
+        "SGLANG_GFX1250_LM_HEAD_RECEIPT " + json.dumps(rec, sort_keys=True),
+        file=sys.stderr,
+        flush=True,
+    )
+
 
 _UNQUANTIZED_LM_HEAD_METHODS = {
     "UnquantizedEmbeddingMethod",
@@ -1121,10 +1194,22 @@ class LogitsProcessor(nn.Module):
                 logits = torch.matmul(
                     hidden_states.bfloat16(), lm_head.weight.T.bfloat16()
                 )
+            elif (
+                _lm_head_tgemm is not None
+                and hidden_states.dim() == 2
+                and hidden_states.dtype == torch.bfloat16
+                and lm_head.weight.dtype == torch.bfloat16
+                and lm_head.weight.dim() == 2
+            ):
+                logits = _lm_head_tgemm.mm(
+                    hidden_states, lm_head.weight, None, otype=torch.bfloat16
+                )
+                _lm_head_receipt("tgemm.mm", hidden_states, lm_head.weight)
             else:
                 logits = torch.matmul(
                     hidden_states.to(lm_head.weight.dtype), lm_head.weight.T
                 )
+                _lm_head_receipt("torch.matmul", hidden_states, lm_head.weight)
         else:
             # GGUF models
             # TODO: use weight_packed_linear for GGUF models
