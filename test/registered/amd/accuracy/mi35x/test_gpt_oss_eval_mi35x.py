@@ -53,7 +53,8 @@ class ModelConfig:
             self.env_vars = {}
 
 
-# GPT-OSS models for MI35x (different paths from MI300X)
+# GPT-OSS models for MI35x (different paths from MI300X). Server args match
+# test/registered/amd/perf/mi35x/test_gpt_oss_perf_mi35x.py (aiter attention).
 MI35X_GPT_OSS_MODELS = [
     ModelConfig(
         model_path="openai/gpt-oss-20b",
@@ -67,7 +68,7 @@ MI35X_GPT_OSS_MODELS = [
             "--mem-fraction-static",
             "0.85",
             "--attention-backend",
-            "triton",
+            "aiter",
             "--trust-remote-code",
         ],
         # AITER MXFP4 fused-MoE for gpt-oss uses the SEPARATED gate/up tile
@@ -92,7 +93,7 @@ MI35X_GPT_OSS_MODELS = [
             "--mem-fraction-static",
             "0.85",
             "--attention-backend",
-            "triton",
+            "aiter",
             "--trust-remote-code",
         ],
         env_vars={

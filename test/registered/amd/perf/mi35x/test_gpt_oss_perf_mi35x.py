@@ -35,8 +35,11 @@ SERVER_ARGS = [
     "--trust-remote-code",
     "--tp",
     "8",
+    # aiter attention (unified gluon kernel for prefill and decode) instead of triton: on one MI355X
+    # (gpt-oss-120b, TP1) +70-84% output tok/s at ISL 70000 / OSL 300 and +4-53% at 1k/1k and 8k/1k,
+    # concurrency 4-16; GSM8K unchanged.
     "--attention-backend",
-    "triton",
+    "aiter",
     "--chunked-prefill-size",
     "130172",
     "--max-running-requests",
