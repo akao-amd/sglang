@@ -344,7 +344,7 @@ ENV BUILD_MOONCAKE="1"
 # gfx1250 now shares the gfx942/gfx950 AITER pin. The four MoE a8w4/a4w4 Gluon
 # reverts it used to carry were dropped: they no longer apply to this tree, and
 # measurement showed they cost ~0.007 GSM8K accuracy rather than protecting it.
-ENV AITER_COMMIT_DEFAULT="2bb549102ba2d9e51da8ef21107361827075d8b6"
+ENV AITER_COMMIT_DEFAULT="bbef5a6f2d3733b293c80d2cee6a8d464e88bc01"
 # The upstream Triton the gfx1250 bring-up was validated against, carried over
 # from the ROCm 7.14 flavor this image replaced. Built from source below.
 ENV TRITON_COMMIT_DEFAULT="76940ad348795521b3dc9f6c79acd7309ff924e3"
@@ -367,7 +367,7 @@ ENV TRITON_REVERT_COMMITS_DEFAULT="9debefe44117a44c274b05033cfe9e4858883b86"
 ENV BUILD_LLVM="0"
 ENV BUILD_AITER_ALL="1"
 ENV BUILD_MOONCAKE="1"
-ENV AITER_COMMIT_DEFAULT="2bb549102ba2d9e51da8ef21107361827075d8b6"
+ENV AITER_COMMIT_DEFAULT="bbef5a6f2d3733b293c80d2cee6a8d464e88bc01"
 ENV BUILD_RCCL="1"
 # Head of ROCm/rocm-systems#14254: develop plus a fix for a hang in the first
 # all-reduce on gfx1250. Not merged yet; move to develop once it is.
