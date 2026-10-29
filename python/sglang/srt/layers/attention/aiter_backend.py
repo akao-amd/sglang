@@ -1266,6 +1266,12 @@ class AiterAttnBackend(AttentionBackend):
                 pt = swa_page_table
 
         k_cache, v_cache = self.kv_layers.read(layer.layer_id).kv()
+        # With an fp8 KV cache, quantize q as the decode path does: unified_attention's
+        # gluon 2d kernel needs q and KV in one dtype, and bf16 q over fp8 KV falls back
+        # to the plain Triton kernel.
+        q_descale = None
+        if self.kv_cache_dtype == fp8_dtype:
+            q, q_descale = self._quantize_q_fp8(q)
         q_u = q.contiguous().view(-1, layer.tp_q_head_num, layer.qk_head_dim)
         o = q_u.new_empty(
             (q_u.shape[0], layer.tp_q_head_num, layer.v_head_dim),
@@ -1285,7 +1291,7 @@ class AiterAttnBackend(AttentionBackend):
             window_size=uni_window,
             block_table=pt,
             softcap=layer.logit_cap,
-            q_descale=None,
+            q_descale=q_descale,
             k_descale=k_descale,
             v_descale=v_descale,
             sinks=sinks,
