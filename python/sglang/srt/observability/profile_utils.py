@@ -158,6 +158,15 @@ class ProfileManager:
             first_rank_in_node=self.first_rank_in_node,
             output_suffix=f"-{stage}" if stage else "",
         )
+        # Drain the device before GPU tracing starts. On ROCm, starting the
+        # profiler while earlier work is still in flight on other HW queues
+        # (graph parallel streams, joined by barrier packets) can leave a
+        # barrier waiting on a completion signal the profiler's queue
+        # interposition never forwards: a TP2 breakable-prefill-graph hang.
+        if torch.cuda.is_available() and "GPU" in (
+            self.profiler_kwargs.get("activities") or []
+        ):
+            torch.cuda.synchronize()
         self.profiler.start()
 
     def _do_stop(self):
