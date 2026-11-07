@@ -187,6 +187,12 @@ logger = logging.getLogger(__name__)
 # Use aiter mla persist design for fp8-kv cache
 _use_mla_ps_kernel = get_bool_env_var("SGLANG_AITER_MLA_PERSIST", "True")
 
+# 6003: q handling over an fp8 KV cache in the unified kernels (gfx1250 path).
+# Prefill default bf16 (as the stack: Triton 2D kernel), decode default static (as the stack).
+_6003_PREFILL_Q = os.environ.get("SGLANG_6003_PREFILL_Q", "bf16")
+_6003_DECODE_Q = os.environ.get("SGLANG_6003_DECODE_Q", "static")
+assert _6003_PREFILL_Q in ("bf16", "static", "dynamic"), _6003_PREFILL_Q
+assert _6003_DECODE_Q in ("bf16", "static", "dynamic"), _6003_DECODE_Q
 
 # Use fp8 prefill only on gfx95
 def _muse_gfx95_like() -> bool:
@@ -1321,6 +1327,23 @@ class AiterAttnBackend(AttentionBackend):
             return "auto"
         return "fp8_e4m3"
 
+    def _quantize_q_fp8_mode(self, q: torch.Tensor, mode: str):
+        """6003: q for the unified kernels over an fp8 KV cache.
+
+        ``bf16``: q stays bf16 (the Triton kernels dequantize K/V to bf16 in-kernel).
+        ``static``: the static q scale (1.0, saturating). ``dynamic``: per-tensor amax/448
+        scale computed on the GPU each call (graph safe, no host sync).
+        Returns ``(q, q_descale)``.
+        """
+        if mode == "bf16":
+            return q, None
+        if mode == "dynamic":
+            q_fp8, q_scale = scaled_fp8_quant(
+                q.reshape(q.shape[0], -1).contiguous(), None
+            )
+            return q_fp8.view(q.shape), q_scale
+        return self._quantize_q_fp8(q)
+
     def _quantize_q_fp8(self, q: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Quantize ``q`` to fp8 with the static q scale.
 
@@ -1957,6 +1980,11 @@ class AiterAttnBackend(AttentionBackend):
                 pt = swa_page_table
 
         k_cache, v_cache = self.kv_layers.read(layer.layer_id).kv()
+        q_descale = None
+        if self.kv_cache_dtype == fp8_dtype and _6003_PREFILL_Q != "bf16":
+            q, q_descale = self._quantize_q_fp8_mode(
+                q.reshape(q.shape[0], -1), _6003_PREFILL_Q
+            )
         q_u = _unified_extend_q(q, layer.tp_q_head_num, layer.qk_head_dim)
         o_shape = (q_u.shape[0], layer.tp_q_head_num, layer.v_head_dim)
         # Under a breakable prefill graph the graph-owned output buffer is handed in here;
@@ -1971,7 +1999,7 @@ class AiterAttnBackend(AttentionBackend):
             o = q_u.new_empty(o_shape, dtype=self.input_dtype)
         else:
             o = o.view(o_shape)
-        q_descale = None
+        # q_descale stays as 6003 set it above (None unless the prefill q mode quantized q)
         # sliding layers take the FP8 extend only on the Gluon kernel (its window variant)
         swa_gluon = (
             self.muse_extend_swa_gluon or self.muse_extend_gfx1250
@@ -5987,7 +6015,7 @@ class AiterAttnBackend(AttentionBackend):
                     return o
                 q_descale = None
                 if self.kv_cache_dtype == fp8_dtype:
-                    q, q_descale = self._quantize_q_fp8(q)
+                    q, q_descale = self._quantize_q_fp8_mode(q, _6003_DECODE_Q)
 
                 unified_attention(
                     q=q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
