@@ -17,7 +17,6 @@
 
 import logging
 import math
-import os
 import re
 from collections.abc import Iterable
 from functools import partial
@@ -381,46 +380,6 @@ def moe_impl(layer_id: int, hidden_states: torch.Tensor) -> torch.Tensor:
     return final_hidden_states
 
 
-# 6003 probe (env-gated, off by default): dump post-RoPE q/k/v of chosen layers for a single long
-# extend request, to replay the attention numerics offline. Needs eager prefill (no prefill graph).
-_DUMP_6003_DIR = os.environ.get("SGLANG_6003_DUMP_DIR")
-_DUMP_6003_LAYERS = {
-    int(x) for x in os.environ.get("SGLANG_6003_DUMP_LAYERS", "0,1,17,35").split(",") if x
-}
-_DUMP_6003_MIN_SEQ = int(os.environ.get("SGLANG_6003_DUMP_MIN_SEQ", "32768"))
-_DUMP_6003_COUNT: Dict[int, int] = {}
-
-
-def _dump_6003(attn, inner_state):
-    q, k, v, forward_batch = inner_state
-    if attn.layer_id not in _DUMP_6003_LAYERS:
-        return
-    if not forward_batch.forward_mode.is_extend() or forward_batch.batch_size != 1:
-        return
-    seq_len = int(forward_batch.seq_lens_cpu[0])
-    if seq_len < _DUMP_6003_MIN_SEQ:
-        return
-    n = _DUMP_6003_COUNT.get(attn.layer_id, 0)
-    _DUMP_6003_COUNT[attn.layer_id] = n + 1
-    os.makedirs(_DUMP_6003_DIR, exist_ok=True)
-    torch.save(
-        {
-            "q": q.detach().to("cpu"),
-            "k": k.detach().to("cpu"),
-            "v": v.detach().to("cpu"),
-            "sinks": attn.sinks.detach().float().cpu(),
-            "scaling": attn.attn.scaling,
-            "sliding_window": attn.attn.sliding_window_size,
-            "num_heads": attn.attn.tp_q_head_num,
-            "num_kv_heads": attn.attn.tp_k_head_num,
-            "head_dim": attn.attn.qk_head_dim,
-            "seq_len": seq_len,
-            "prefix_len": int(forward_batch.extend_prefix_lens_cpu[0]),
-        },
-        os.path.join(_DUMP_6003_DIR, f"L{attn.layer_id:02d}_c{n:02d}_s{seq_len}.pt"),
-    )
-
-
 class GptOssAttention(nn.Module):
     def __init__(
         self,
@@ -550,8 +509,6 @@ class GptOssAttention(nn.Module):
         hidden_states, forward_batch, inner_state = intermediate_state
         if inner_state is None:
             return hidden_states
-        if _DUMP_6003_DIR:
-            _dump_6003(self, inner_state)
         attn_output = self.attn(
             *inner_state,
             sinks=self.sinks,
