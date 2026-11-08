@@ -109,10 +109,10 @@ logger = logging.getLogger(__name__)
 # Use aiter mla persist design for fp8-kv cache
 _use_mla_ps_kernel = get_bool_env_var("SGLANG_AITER_MLA_PERSIST", "True")
 
-# 6003: q handling over an fp8 KV cache in the unified kernels (gfx1250 path).
-# Prefill default bf16 (as the stack: Triton 2D kernel), decode default static (as the stack).
-_6003_PREFILL_Q = os.environ.get("SGLANG_6003_PREFILL_Q", "bf16")
-_6003_DECODE_Q = os.environ.get("SGLANG_6003_DECODE_Q", "static")
+# Nov05: over an fp8 KV cache, prefill q is fp8 static and decode q stays bf16.
+# Override with SGLANG_6003_PREFILL_Q / SGLANG_6003_DECODE_Q (bf16, static, dynamic).
+_6003_PREFILL_Q = os.environ.get("SGLANG_6003_PREFILL_Q", "static")
+_6003_DECODE_Q = os.environ.get("SGLANG_6003_DECODE_Q", "bf16")
 assert _6003_PREFILL_Q in ("bf16", "static", "dynamic"), _6003_PREFILL_Q
 assert _6003_DECODE_Q in ("bf16", "static", "dynamic"), _6003_DECODE_Q
 
