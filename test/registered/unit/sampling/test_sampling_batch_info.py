@@ -57,6 +57,115 @@ def _grammar(vocab_mask, apply_vocab_mask):
 
 # SamplingPipeline
 class TestSamplingPipelineOrder(CustomTestCase):
+    def _deferred_decode_case(self):
+        from sglang.srt.layers.sampler import Sampler
+
+        sampler = Sampler.__new__(Sampler)
+        torch.nn.Module.__init__(sampler)
+        full = torch.arange(VOCAB_SIZE, dtype=torch.float32).reshape(1, -1)
+        peer = full[:, VOCAB_SIZE // 2 :]
+
+        class Processor:
+            def sharded_greedy_consensus(self, eligible):
+                return eligible
+
+            def deferred_argmax(self, local, *, torch_compatible):
+                assert torch_compatible
+                return torch.cat((local, peer), -1).argmax(-1)
+
+            def finish_deferred_gather(self, local):
+                return torch.cat((local, peer), -1)
+
+        info = _make_info(is_all_greedy=True)
+        output = LogitsProcessorOutput(
+            next_token_logits=full[:, : VOCAB_SIZE // 2],
+            next_token_logits_deferred_processor=Processor(),
+        )
+        batch = SimpleNamespace(
+            sampling_info=info,
+            return_logprob=False,
+            top_logprobs_nums=[0],
+            token_ids_logprobs=[None],
+            positions=torch.tensor([0]),
+            forward_mode=SimpleNamespace(is_decode=lambda: True),
+        )
+        return SamplingPipeline(sampler=sampler, watermark=None), output, batch
+
+    def test_deferred_greedy_selects_global_token_and_releases_shard(self):
+        """Decode's local shard must select the peer winner and expose no partial logits."""
+        from contextlib import ExitStack
+
+        from sglang.srt.environ import envs
+
+        pipeline, output, batch = self._deferred_decode_case()
+        with ExitStack() as stack:
+            for name in (
+                "SGLANG_SANITIZE_NAN_LOGITS",
+                "SGLANG_ENABLE_NAN_LOGITS_CHECK",
+                "SGLANG_ENABLE_ASYNC_ASSERT",
+            ):
+                stack.enter_context(getattr(envs, name).override(False))
+            stack.enter_context(
+                patch("sglang.srt.layers.sampler.SYNC_TOKEN_IDS_ACROSS_TP", False)
+            )
+            ids = pipeline.sample(output, batch, observer=None, graph_token_ids=None)
+        self.assertEqual(ids.tolist(), [VOCAB_SIZE - 1])
+        self.assertIsNone(output.next_token_logits)
+        self.assertIsNone(output.next_token_logits_deferred_processor)
+
+    def test_deferred_decode_gathers_before_global_logit_bias(self):
+        """A bias on a peer token needs full logits before the pipeline applies it."""
+        pipeline, output, batch = self._deferred_decode_case()
+        batch.sampling_info.logit_bias = torch.zeros(1, VOCAB_SIZE)
+        batch.sampling_info.logit_bias[0, VOCAB_SIZE - 2] = 100.0
+        with patch("sglang.srt.layers.sampler.SYNC_TOKEN_IDS_ACROSS_TP", False):
+            ids = pipeline.sample(output, batch, observer=None, graph_token_ids=None)
+        self.assertEqual(ids.tolist(), [VOCAB_SIZE - 2])
+        self.assertEqual(output.next_token_logits.shape, (1, VOCAB_SIZE))
+        self.assertIsNone(output.next_token_logits_deferred_processor)
+
+    def test_deferred_decode_peer_veto_preserves_full_logits(self):
+        """A consumer on the other rank must force the full gather on this rank too."""
+        pipeline, output, batch = self._deferred_decode_case()
+        output.next_token_logits_deferred_processor.sharded_greedy_consensus = (
+            lambda eligible: False
+        )
+        with patch("sglang.srt.layers.sampler.SYNC_TOKEN_IDS_ACROSS_TP", False):
+            ids = pipeline.sample(output, batch, observer=None, graph_token_ids=None)
+        self.assertEqual(ids.tolist(), [VOCAB_SIZE - 1])
+        self.assertEqual(output.next_token_logits.shape, (1, VOCAB_SIZE))
+        self.assertIsNone(output.next_token_logits_deferred_processor)
+
+    def test_deferred_sample_does_not_clear_cached_graph_output(self):
+        """Each replay slices into a new output object; its cleanup must spare the cache."""
+        import dataclasses
+        from contextlib import ExitStack
+
+        from sglang.srt.environ import envs
+
+        pipeline, cached, batch = self._deferred_decode_case()
+        with ExitStack() as stack:
+            for name in (
+                "SGLANG_SANITIZE_NAN_LOGITS",
+                "SGLANG_ENABLE_NAN_LOGITS_CHECK",
+                "SGLANG_ENABLE_ASYNC_ASSERT",
+            ):
+                stack.enter_context(getattr(envs, name).override(False))
+            stack.enter_context(
+                patch("sglang.srt.layers.sampler.SYNC_TOKEN_IDS_ACROSS_TP", False)
+            )
+            for _ in range(2):
+                output = dataclasses.replace(
+                    cached, next_token_logits=cached.next_token_logits[:1]
+                )
+                ids = pipeline.sample(
+                    output, batch, observer=None, graph_token_ids=None
+                )
+                self.assertEqual(ids.tolist(), [VOCAB_SIZE - 1])
+                self.assertIsNone(output.next_token_logits)
+                self.assertIsNotNone(cached.next_token_logits)
+                self.assertIsNotNone(cached.next_token_logits_deferred_processor)
+
     def test_sample_runs_every_stage_in_one_fixed_order(self):
         """The stages run in non-speculative sampling's order; the custom
         processor and sanitize also process the watermark's logprob logits."""

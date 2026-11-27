@@ -5,6 +5,7 @@ import triton
 import triton.language as tl
 from triton.language.extra import libdevice
 
+from sglang.kernels.ops.speculative.row_argmax import _argmax_pair
 from sglang.srt.utils.device import is_hip
 
 
@@ -52,6 +53,8 @@ def _softcap_row_argmax_partial_kernel(
     softcapping_value,
     NSPLIT: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
+    HAS_SOFTCAP: tl.constexpr = True,
+    TORCH_COMPATIBLE: tl.constexpr = False,
 ):
     # One vocab chunk of one row: (softcapped max, lowest column attaining it).
     row = tl.program_id(0).to(tl.int64)
@@ -59,12 +62,19 @@ def _softcap_row_argmax_partial_kernel(
     cols = split * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = cols < valid_width
     x = tl.load(logits_ptr + row * row_stride + cols, mask=mask, other=0.0)
-    x = x / softcapping_value
-    x = libdevice.tanh(x)
-    x = x * softcapping_value
+    if TORCH_COMPATIBLE:
+        x = x.to(tl.float32)
+    if HAS_SOFTCAP:
+        x = x / softcapping_value
+        x = libdevice.tanh(x)
+        x = x * softcapping_value
     x = tl.where(mask, x, -float("inf"))
-    top = tl.max(x, axis=0)
-    idx = tl.min(tl.where(x == top, cols, 0x7FFFFFFF), axis=0)
+    if TORCH_COMPATIBLE:
+        indices = tl.where(mask, cols, 0x7FFFFFFF)
+        top, idx = tl.reduce((x, indices), 0, _argmax_pair)
+    else:
+        top = tl.max(x, axis=0)
+        idx = tl.min(tl.where(x == top, cols, 0x7FFFFFFF), axis=0)
     tl.store(part_val_ptr + row * NSPLIT + split, top)
     tl.store(part_idx_ptr + row * NSPLIT + split, idx)
 
@@ -76,15 +86,25 @@ def _softcap_row_argmax_final_kernel(
     out_ptr,
     col_offset,
     NSPLIT: tl.constexpr,
+    TORCH_COMPATIBLE: tl.constexpr = False,
 ):
     row = tl.program_id(0).to(tl.int64)
     s = tl.arange(0, NSPLIT)
     val = tl.load(part_val_ptr + row * NSPLIT + s)
     idx = tl.load(part_idx_ptr + row * NSPLIT + s)
-    top = tl.max(val, axis=0)
-    best = tl.min(tl.where(val == top, idx, 0x7FFFFFFF), axis=0)
+    if TORCH_COMPATIBLE:
+        top, best = tl.reduce((val, idx), 0, _argmax_pair)
+    else:
+        top = tl.max(val, axis=0)
+        best = tl.min(tl.where(val == top, idx, 0x7FFFFFFF), axis=0)
     tl.store(out_ptr + row * 2, top)
-    tl.store(out_ptr + row * 2 + 1, (best + col_offset).to(tl.float32))
+    if TORCH_COMPATIBLE:
+        # An empty shard must lose even when every real logit is -inf. Keep its
+        # sentinel exactly representable in fp32 and within the merge's int32 range.
+        global_best = tl.where(best == 0x7FFFFFFF, 0xFFFFFF, best + col_offset)
+    else:
+        global_best = best + col_offset
+    tl.store(out_ptr + row * 2 + 1, global_best.to(tl.float32))
 
 
 @triton.jit
@@ -94,6 +114,7 @@ def _merge_row_argmax_shards_kernel(
     num_rows,
     world,
     WORLD_P2: tl.constexpr,
+    TORCH_COMPATIBLE: tl.constexpr = False,
 ):
     # Rank-major [world, rows, 2]; ranks own increasing vocab ranges, so the
     # lowest index among the tied maxima is the lowest rank's.
@@ -103,15 +124,19 @@ def _merge_row_argmax_shards_kernel(
     base = gathered_ptr + (r.to(tl.int64) * num_rows + row) * 2
     val = tl.load(base, mask=mask, other=-float("inf"))
     idx = tl.load(base + 1, mask=mask, other=float("inf"))
-    top = tl.max(val, axis=0)
-    best = tl.min(tl.where(val == top, idx, float("inf")), axis=0)
+    if TORCH_COMPATIBLE:
+        indices = tl.where(mask, idx.to(tl.int32), 0x7FFFFFFF)
+        _, best = tl.reduce((val, indices), 0, _argmax_pair)
+    else:
+        top = tl.max(val, axis=0)
+        best = tl.min(tl.where(val == top, idx, float("inf")), axis=0)
     tl.store(out_ptr + row, best.to(tl.int64))
 
 
-def merge_row_argmax_shards(gathered):
+def merge_row_argmax_shards(gathered, *, torch_compatible=False):
     """Global argmax ``[rows]`` int64 from the rank-major ``[world, rows, 2]``
     all-gather of softcap_row_argmax. Equal maxima resolve to the lowest rank,
-    hence the lowest vocab index, as torch.argmax over the gathered row does."""
+    hence the lowest vocab index. `torch_compatible` also preserves NaN priority."""
     world, num_rows, _ = gathered.shape
     if not gathered.is_cuda:
         best_rank = gathered[..., 0].argmax(dim=0, keepdim=True)
@@ -124,19 +149,28 @@ def merge_row_argmax_shards(gathered):
         num_rows,
         world,
         WORLD_P2=triton.next_power_of_2(world),
+        TORCH_COMPATIBLE=torch_compatible,
         num_warps=1,
     )
     return out
 
 
-def softcap_row_argmax(logits, final_logit_softcapping, valid_width, col_offset):
+def softcap_row_argmax(
+    logits, final_logit_softcapping, valid_width, col_offset, *, torch_compatible=False
+):
     """Per row of a vocab shard: ``(max, first argmax + col_offset)`` of the
-    (optionally softcapped) logits over the first ``valid_width`` columns, as fp32 ``[rows, 2]``."""
+    (optionally softcapped) logits over the first ``valid_width`` columns, as fp32 ``[rows, 2]``.
+
+    `torch_compatible` widens inputs before softcap and preserves NaN priority,
+    signed-zero ties, and padding masks with the shared torch argmax comparator.
+    """
     assert logits.dtype in (torch.float32, torch.bfloat16, torch.float16)
     assert logits.stride(1) == 1
     assert col_offset + logits.shape[1] < 2**24
     num_rows = logits.shape[0]
-    if not (is_hip() and final_logit_softcapping and logits.dtype == torch.float32):
+    if not torch_compatible and not (
+        is_hip() and final_logit_softcapping and logits.dtype == torch.float32
+    ):
         out = torch.empty(num_rows, 2, dtype=torch.float32, device=logits.device)
         _softcap_row_argmax_kernel[(num_rows,)](
             logits,
@@ -162,13 +196,21 @@ def softcap_row_argmax(logits, final_logit_softcapping, valid_width, col_offset)
         part_idx,
         logits.stride(0),
         valid_width,
-        final_logit_softcapping,
+        final_logit_softcapping or 1.0,
         NSPLIT=nsplit,
         BLOCK_SIZE=block,
-        num_warps=8,
+        HAS_SOFTCAP=bool(final_logit_softcapping),
+        TORCH_COMPATIBLE=torch_compatible,
+        num_warps=4 if torch_compatible else 8,
     )
     out = torch.empty(num_rows, 2, dtype=torch.float32, device=logits.device)
     _softcap_row_argmax_final_kernel[(num_rows,)](
-        part_val, part_idx, out, col_offset, NSPLIT=nsplit, num_warps=1
+        part_val,
+        part_idx,
+        out,
+        col_offset,
+        NSPLIT=nsplit,
+        TORCH_COMPATIBLE=torch_compatible,
+        num_warps=1,
     )
     return out

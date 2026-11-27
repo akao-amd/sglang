@@ -5,8 +5,13 @@ import sys
 import pytest
 import torch
 
+from sglang.kernels.ops.activation.softcap import softcap_to_float32_logits
 from sglang.kernels.ops.sampling import argmax as sampling_argmax
 from sglang.kernels.ops.sampling.argmax_triton import argmax, can_argmax
+from sglang.kernels.ops.sampling.softcap_row_argmax import (
+    merge_row_argmax_shards,
+    softcap_row_argmax,
+)
 from sglang.kernels.spec import KernelBackend
 from sglang.test.ci.ci_register import register_amd_ci
 
@@ -85,6 +90,67 @@ def test_argmax_unsupported_cpu_inputs_keep_torch_fallback():
     torch.testing.assert_close(
         sampling_argmax(x, backend=KernelBackend.TRITON), x.argmax(-1), rtol=0, atol=0
     )
+
+
+def _check_sharded_argmax(shards, cap, crop=0):
+    world, rows, width = shards.shape
+    vocab = world * width - crop
+    local = [
+        softcap_row_argmax(
+            shards[rank],
+            cap,
+            max(0, min(width, vocab - rank * width)),
+            rank * width,
+            torch_compatible=True,
+        )
+        for rank in range(world)
+    ]
+    gathered = torch.stack(local)
+    actual = merge_row_argmax_shards(gathered, torch_compatible=True)
+    reordered = shards.movedim(0, 1).reshape(rows, world * width)[:, :vocab]
+    expected_logits = torch.empty(
+        (rows, vocab), dtype=torch.float32, device=shards.device
+    )
+    if cap:
+        softcap_to_float32_logits(reordered, cap, expected_logits)
+    else:
+        expected_logits.copy_(reordered)
+    torch.testing.assert_close(actual, expected_logits.argmax(-1), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    "rows,dtype",
+    [
+        (8, torch.bfloat16),
+        (44, torch.bfloat16),
+        (168, torch.bfloat16),
+        (8, torch.float32),
+    ],
+)
+def test_sharded_softcap_argmax_matches_full_logits(gfx1250, rows, dtype):
+    shards = torch.randn(2, rows, 100544, dtype=dtype, device="cuda")
+    _check_sharded_argmax(shards, 30.0, crop=7)
+
+
+@pytest.mark.parametrize("cap", [None, 30.0])
+def test_sharded_argmax_nan_ties_and_vocab_crop(gfx1250, cap):
+    """Select after softcap; raw maxima can differ while their saturated outputs tie."""
+    x = torch.full((2, 8, 5000), -1.0, dtype=torch.bfloat16, device="cuda")
+    x[0, 0, 7], x[1, 0, 0] = 1024.0, 2048.0
+    x[0, 1, 17] = x[1, 1, 0] = float("nan")
+    x[1, 2, 4992] = float("nan")
+    x[:, 3].fill_(float("nan"))
+    x[:, 4].fill_(float("-inf"))
+    x[0, 5, 13], x[1, 5, 3] = -0.0, 0.0
+    x[:, 6].fill_(-2.5)
+    x[0, 7, 5] = 2.0
+    x[1, 7, 4993:] = float("nan")
+    _check_sharded_argmax(x, cap, crop=7)
+
+
+def test_sharded_argmax_empty_padding_rank(gfx1250):
+    x = torch.full((2, 2, 4096), float("-inf"), dtype=torch.float32, device="cuda")
+    _check_sharded_argmax(x, None, crop=4096)
 
 
 if __name__ == "__main__":
