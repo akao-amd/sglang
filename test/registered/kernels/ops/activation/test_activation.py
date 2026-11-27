@@ -11,6 +11,10 @@ from sglang.kernels.ops.activation.activation import (
     run_activation,
     silu_and_mul_with_activation_rounding,
 )
+from sglang.kernels.ops.activation.softcap import (
+    gathered_softcap_logits,
+    softcap_to_float32_logits,
+)
 from sglang.srt.utils import is_sm90_supported
 from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
 
@@ -39,6 +43,24 @@ SHAPES = get_ci_test_range(
     ],
     ci_range=[(2, 3, 512), (48, 3072), (38, 8192)],
 )
+
+
+@pytest.mark.parametrize("rows,shard_width,crop", [(3, 1025, 7), (44, 100544, 0)])
+def test_bf16_gather_softcap_preserves_reordered_logits(rows, shard_width, crop):
+    """Fusing the BF16 gather reorder must preserve FP32 softcap and padding crop."""
+    gathered = torch.randn((2, rows, shard_width), dtype=torch.bfloat16, device="cuda")
+    width = 2 * shard_width - crop
+    # Large logits exercise tanh saturation and the low-index argmax tie rule.
+    gathered[0, :, 0] = 1024
+    gathered[1, :, -1] = 1024
+    reordered = gathered.movedim(0, 1).reshape(rows, 2 * shard_width)[:, :width]
+    expected = torch.empty((rows, width), dtype=torch.float32, device="cuda")
+    actual = torch.empty_like(expected)
+    softcap_to_float32_logits(reordered, 30.0, expected)
+    result = gathered_softcap_logits(gathered, 30.0, actual)
+    assert result is actual
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    torch.testing.assert_close(actual.argmax(-1), expected.argmax(-1), rtol=0, atol=0)
 
 
 def _reference(op_name: str, x: torch.Tensor) -> torch.Tensor:

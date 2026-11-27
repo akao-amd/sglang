@@ -1356,7 +1356,15 @@ class LogitsProcessor(nn.Module):
             and bool(self.final_logit_softcapping)
             and logits.is_cuda
             and not (_is_npu or _is_cpu)
-            and logits.dtype == torch.float32
+            and (
+                logits.dtype == torch.float32
+                or (
+                    logits.dtype == torch.bfloat16
+                    and envs.SGLANG_2X_BF16_GATHER_SOFTCAP.get()
+                    and is_gfx1250_supported()
+                    and logits_metadata.forward_mode.is_decode()
+                )
+            )
             and logits.dim() == 2
             and logits.is_contiguous()
             and not self._can_use_tp_lm_head_all_to_all(

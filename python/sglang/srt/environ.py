@@ -1759,6 +1759,8 @@ class Envs:
     # GPT-OSS TP2 gfx1250: keep decode logits local, reduce pure greedy rows by shard.
     SGLANG_2X_SHARDED_GREEDY = EnvBool(False)
     SGLANG_RETURN_ORIGINAL_LOGPROB = EnvBool(False)
+    # gfx1250 decode: reorder all-gathered BF16 logits, cast, and softcap in one pass.
+    SGLANG_2X_BF16_GATHER_SOFTCAP = EnvBool(False)
     # Sanitize NaN logits before sampling kernels and log a throttled warning
     # (see sanitize_nan_logits).
     SGLANG_SANITIZE_NAN_LOGITS = EnvBool(False)
