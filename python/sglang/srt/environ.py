@@ -1209,6 +1209,8 @@ class Envs:
     # the SHUFFLE KV layout that enables pa_decode_gluon for full-attn
     # decode without runtime permutes.
     SGLANG_AITER_KV_CACHE_LAYOUT = EnvStr("nhd")
+    # Full-attention decode experiment: visit adjacent KV heads together.
+    SGLANG_2X_DECODE_KV_HEAD_FIRST = EnvBool(False)
     SGLANG_ROCM_FUSED_DECODE_MLA = EnvBool(False)
     # Apply RoPE inside the ROCm fused MLA decode kernel instead of before it.
     SGLANG_FUSED_MLA_ENABLE_ROPE_FUSION = EnvBool(True)

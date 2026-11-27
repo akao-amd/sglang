@@ -194,6 +194,7 @@ _6003_DECODE_Q = os.environ.get("SGLANG_6003_DECODE_Q", "bf16")
 assert _6003_PREFILL_Q in ("bf16", "static", "dynamic"), _6003_PREFILL_Q
 assert _6003_DECODE_Q in ("bf16", "static", "dynamic"), _6003_DECODE_Q
 
+
 # Use fp8 prefill only on gfx95
 def _muse_gfx95_like() -> bool:
     """gfx950, or gfx1250 when SGLANG_ROCM_MUSE_GFX1250_TRY_GFX95=1: the Muse attention paths were validated on gfx950
@@ -948,6 +949,16 @@ class AiterAttnBackend(AttentionBackend):
         else:
             self.use_triton_unified_attention = get_bool_env_var(
                 "SGLANG_USE_AITER_UNIFIED_ATTN"
+            )
+        self.decode_kv_head_first = envs.SGLANG_2X_DECODE_KV_HEAD_FIRST.get()
+        if self.decode_kv_head_first and (
+            not is_gfx1250_supported()
+            or "decode_kv_head_first"
+            not in inspect.signature(unified_attention).parameters
+        ):
+            raise ValueError(
+                "SGLANG_2X_DECODE_KV_HEAD_FIRST requires gfx1250 and an AITER "
+                "build with decode_kv_head_first support."
             )
         # Deterministic mode allows aiter decode only for the paged_attention_ragged
         # path and aiter prefill only for the batch prefill path; the unified-attention
@@ -6017,6 +6028,21 @@ class AiterAttnBackend(AttentionBackend):
                 if self.kv_cache_dtype == fp8_dtype:
                     q, q_descale = self._quantize_q_fp8_mode(q, _6003_DECODE_Q)
 
+                decode_options = {}
+                if (
+                    self.decode_kv_head_first
+                    and self.forward_metadata.max_q_len == 1
+                    and window_size == (-1, -1)
+                    and self.page_size == 64
+                    and layer.qk_head_dim == layer.v_head_dim == 64
+                    and layer.tp_q_head_num == layer.tp_k_head_num * 8
+                    and layer.tp_k_head_num == layer.tp_v_head_num
+                    and layer.tp_k_head_num in (4, 8)
+                    and q.dtype == torch.bfloat16
+                    and self.kv_cache_dtype == fp8_dtype
+                ):
+                    decode_options = {"decode_kv_head_first": True, "backend": "triton"}
+
                 unified_attention(
                     q=q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
                     k=k_cache.view(
@@ -6039,6 +6065,7 @@ class AiterAttnBackend(AttentionBackend):
                     k_descale=k_descale,
                     v_descale=v_descale,
                     sinks=sinks,
+                    **decode_options,
                 )
             else:
                 self._reject_paged_decode_sliding_window(layer)
