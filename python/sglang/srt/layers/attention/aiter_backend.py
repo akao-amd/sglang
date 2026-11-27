@@ -6041,7 +6041,7 @@ class AiterAttnBackend(AttentionBackend):
                     and q.dtype == torch.bfloat16
                     and self.kv_cache_dtype == fp8_dtype
                 ):
-                    decode_options = {"decode_kv_head_first": True, "backend": "triton"}
+                    decode_options = {"decode_kv_head_first": True}
 
                 unified_attention(
                     q=q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
