@@ -10,6 +10,7 @@ from sglang._lazy_import import LazyImport
 from sglang.kernels.ops.sampling import argmax as sampler_argmax
 from sglang.kernels.ops.sampling import softmax as sampler_softmax
 from sglang.kernels.ops.sampling.murmur_hash import murmur_hash32
+from sglang.kernels.spec import KernelBackend
 from sglang.srt.arg_groups.choices import BUILT_IN_SAMPLING_BACKENDS
 from sglang.srt.environ import envs
 from sglang.srt.layers.dp_attention import (
@@ -202,7 +203,12 @@ class Sampler(nn.Module):
                 )
                 _aiter_greedy_sample(batch_next_token_ids, logits)
             else:
-                batch_next_token_ids = sampler_argmax(logits)
+                if envs.SGLANG_2X_TRITON_ARGMAX.get() and is_gfx1250_supported():
+                    batch_next_token_ids = sampler_argmax(
+                        logits, backend=KernelBackend.TRITON
+                    )
+                else:
+                    batch_next_token_ids = sampler_argmax(logits)
             _trace_e2e_sampler(
                 "greedy_returned", output_shape=tuple(batch_next_token_ids.shape)
             )

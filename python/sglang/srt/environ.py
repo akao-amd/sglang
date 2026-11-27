@@ -1754,6 +1754,8 @@ class Envs:
     # ===================================================================
     # Logits and log-probability processing
     # ===================================================================
+    # gfx1250 greedy sampler: reuse the exact split-vocabulary Triton argmax.
+    SGLANG_2X_TRITON_ARGMAX = EnvBool(False)
     SGLANG_RETURN_ORIGINAL_LOGPROB = EnvBool(False)
     # Sanitize NaN logits before sampling kernels and log a throttled warning
     # (see sanitize_nan_logits).

@@ -67,6 +67,14 @@ register_kernel(
 )
 register_kernel(
     KernelSpec(
+        op="sampling.argmax",
+        backend=KernelBackend.TRITON,
+        target="sglang.kernels.ops.sampling.argmax_triton:argmax",
+        capabilities=frozenset({CapabilityRequirement.HIP}),
+    )
+)
+register_kernel(
+    KernelSpec(
         op="sampling.verify_penalties",
         backend=KernelBackend.JIT,
         target="sglang.kernels.ops.sampling.verify_penalties:apply_verify_penalties",
@@ -152,13 +160,28 @@ def softmax_sample(
     return softmax_jit.softmax_sample(logits, temperatures, top_ks=top_ks, out=out)
 
 
-def argmax(logits: torch.Tensor) -> torch.Tensor:
+def argmax(
+    logits: torch.Tensor, *, backend: Optional[KernelBackend] = None
+) -> torch.Tensor:
     """Row-wise int64 argmax of ``[rows, vocab]``; a value tie takes the lowest index.
 
     The CUDA JIT kernel never picks a NaN; the NPU kernel and torch fallback
-    preserve torch.argmax's NaN selection.
+    preserve torch.argmax's NaN selection. Explicit TRITON selects the existing
+    split-vocabulary kernel for gfx1250 FP32 wide rows, with torch fallback
+    outside its coverage; the default keeps the current device dispatch.
     """
     import torch
+
+    if backend is not None:
+        if backend != KernelBackend.TRITON:
+            raise ValueError(
+                "Only the TRITON argmax backend can be selected explicitly"
+            )
+        from sglang.kernels.ops.sampling import argmax_triton
+
+        if argmax_triton.can_argmax(logits):
+            return get_kernel("sampling.argmax", KernelBackend.TRITON)(logits)
+        return torch.argmax(logits, dim=-1)
 
     if logits.is_cuda and PlatformInfo.detect().device_type == "npu":
         if (
