@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
+from sglang.srt.environ import envs
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.managers.auxiliary_output import CompositeHostAuxiliaryOutput
 from sglang.srt.managers.scheduler import Scheduler
@@ -41,10 +42,13 @@ class DeviceOutput:
         ({}, {}, True),
     ],
 )
-def test_forward_observer_registration(runner_kwargs, topology, mlx):
+@pytest.mark.parametrize("sharded_greedy", [False, True])
+def test_forward_observer_registration(runner_kwargs, topology, mlx, sharded_greedy):
+    """Forward observers must not receive deferred, unsoftcapped local logits."""
     observer = Mock()
     with (
         published_topology(**topology),
+        envs.SGLANG_2X_SHARDED_GREEDY.override(sharded_greedy),
         patch("sglang.srt.hardware_backend.mlx.runtime.use_mlx", return_value=mlx),
     ):
         runner = object.__new__(ModelRunner)
@@ -53,12 +57,14 @@ def test_forward_observer_registration(runner_kwargs, topology, mlx):
         runner.is_generation = True
         runner._forward_observer = None
         runner.__dict__.update(runner_kwargs)
-        if runner_kwargs or topology or mlx:
+        if runner_kwargs or topology or mlx or sharded_greedy:
             with pytest.raises(ValueError, match="configured forward path"):
                 runner.forward_observer = observer
         else:
             runner.forward_observer = observer
             assert runner.forward_observer is observer
+        runner.forward_observer = None
+        assert runner.forward_observer is None
 
 
 def _tp_worker(runner):

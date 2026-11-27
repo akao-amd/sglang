@@ -79,6 +79,47 @@ def unpack(sel):
     return survivors, finished
 
 
+class TestBeamLogitsCapture(CustomTestCase):
+    def test_deferred_decode_captures_full_vocab_before_splitting_rows(self):
+        """Beam selection must retain peer-vocab logits before leader sampling."""
+        import dataclasses
+
+        from sglang.srt.beam_search.logits_capture import capture_pre_sample_logits
+        from sglang.srt.layers.logits_processor import LogitsProcessorOutput
+
+        full = torch.arange(32, dtype=torch.float32).reshape(4, 8)
+        shard = full[:, :4]
+
+        class Processor:
+            def finish_deferred_gather(self, local):
+                # Capture must gather all rows before separating the beam tail.
+                assert local.shape == (4, 4)
+                return torch.cat((local, full[:, 4:]), dim=-1)
+
+        cached = LogitsProcessorOutput(
+            next_token_logits=shard,
+            next_token_logits_deferred_processor=Processor(),
+        )
+        output = dataclasses.replace(cached)
+        batch = SimpleNamespace(
+            beam_tail=SimpleNamespace(
+                num_base_rows=2, entries=[SimpleNamespace(leader_idx=1)]
+            )
+        )
+        forward_batch = SimpleNamespace(positions=torch.arange(4))
+        capture_pre_sample_logits(batch, forward_batch, output)
+
+        torch.testing.assert_close(output.next_token_logits, full[:2])
+        torch.testing.assert_close(output.beam.leader_logits, full[1:2])
+        torch.testing.assert_close(output.beam.tail_logits, full[2:])
+        self.assertIsNone(output.next_token_logits_deferred_processor)
+        self.assertIsNotNone(cached.next_token_logits_deferred_processor)
+        # In-place sampling must spare both the captured leader and member rows.
+        output.next_token_logits.zero_()
+        torch.testing.assert_close(output.beam.leader_logits, full[1:2])
+        torch.testing.assert_close(output.beam.tail_logits, full[2:])
+
+
 class TestJointSelectGolden(CustomTestCase):
     CUM = [0.0, -1.0]
     LOGPROBS = [[-0.1, -0.2, -0.3, -0.4], [-0.05, -0.5, -0.6, -0.7]]

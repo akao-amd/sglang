@@ -370,6 +370,9 @@ class ModelRunner:
             and get_exec().dllm.dllm_algorithm is None
             and self.spec_algorithm.is_none()
             and get_parallel().pp_size == 1
+            # Deferred decode logits are resolved later, in SamplingPipeline.
+            # A forward observer runs before that and requires full logits.
+            and not envs.SGLANG_2X_SHARDED_GREEDY.get()
         )
 
     def __init__(
