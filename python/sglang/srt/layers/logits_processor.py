@@ -1353,13 +1353,17 @@ class LogitsProcessor(nn.Module):
             self.do_tensor_parallel_all_gather
             and not self.use_attn_tp_group
             and not self.do_tensor_parallel_all_gather_dp_attn
-            and bool(self.final_logit_softcapping)
             and logits.is_cuda
             and not (_is_npu or _is_cpu)
             and (
-                logits.dtype == torch.float32
+                (logits.dtype == torch.float32 and bool(self.final_logit_softcapping))
                 or (
                     logits.dtype == torch.bfloat16
+                    # GPT-OSS has no final softcap; fuse its reorder and cast.
+                    and (
+                        self.final_logit_softcapping is None
+                        or bool(self.final_logit_softcapping)
+                    )
                     and envs.SGLANG_2X_BF16_GATHER_SOFTCAP.get()
                     and is_gfx1250_supported()
                     and logits_metadata.forward_mode.is_decode()

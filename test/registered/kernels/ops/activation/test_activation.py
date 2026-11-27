@@ -12,6 +12,7 @@ from sglang.kernels.ops.activation.activation import (
     silu_and_mul_with_activation_rounding,
 )
 from sglang.kernels.ops.activation.softcap import (
+    cast_to_float32_logits,
     gathered_softcap_logits,
     softcap_to_float32_logits,
 )
@@ -45,9 +46,13 @@ SHAPES = get_ci_test_range(
 )
 
 
-@pytest.mark.parametrize("rows,shard_width,crop", [(3, 1025, 7), (44, 100544, 0)])
-def test_bf16_gather_softcap_preserves_reordered_logits(rows, shard_width, crop):
-    """Fusing the BF16 gather reorder must preserve FP32 softcap and padding crop."""
+@pytest.mark.parametrize("cap", [None, 30.0])
+@pytest.mark.parametrize(
+    "rows,shard_width,crop",
+    [(3, 1025, 7), (8, 100544, 7), (44, 100544, 0), (168, 100544, 7)],
+)
+def test_bf16_gather_softcap_preserves_reordered_logits(rows, shard_width, crop, cap):
+    """Reorder/cast and optional softcap must preserve logits and padding crop."""
     gathered = torch.randn((2, rows, shard_width), dtype=torch.bfloat16, device="cuda")
     width = 2 * shard_width - crop
     # Large logits exercise tanh saturation and the low-index argmax tie rule.
@@ -56,11 +61,34 @@ def test_bf16_gather_softcap_preserves_reordered_logits(rows, shard_width, crop)
     reordered = gathered.movedim(0, 1).reshape(rows, 2 * shard_width)[:, :width]
     expected = torch.empty((rows, width), dtype=torch.float32, device="cuda")
     actual = torch.empty_like(expected)
-    softcap_to_float32_logits(reordered, 30.0, expected)
-    result = gathered_softcap_logits(gathered, 30.0, actual)
+    if cap is None:
+        cast_to_float32_logits(reordered, expected)
+    else:
+        softcap_to_float32_logits(reordered, cap, expected)
+    result = gathered_softcap_logits(gathered, cap, actual)
     assert result is actual
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
     torch.testing.assert_close(actual.argmax(-1), expected.argmax(-1), rtol=0, atol=0)
+
+
+def test_bf16_gather_softcap_none_preserves_bit_patterns_and_output_stride():
+    """The cast-only path preserves NaN/inf/zero bits and leaves buffer padding."""
+    gathered = (
+        torch.arange(65536, device="cuda", dtype=torch.int32)
+        .to(torch.int16)
+        .view(torch.bfloat16)
+        .view(2, 4, 8192)
+    )
+    vocab = 16384 - 7
+    reordered = gathered.movedim(0, 1).reshape(4, 16384)[:, :vocab]
+    expected = torch.empty((4, vocab), dtype=torch.float32, device="cuda")
+    storage = torch.full((4, vocab + 17), -123.0, device="cuda")
+    actual = storage[:, :vocab]
+    cast_to_float32_logits(reordered, expected)
+    assert gathered_softcap_logits(gathered, None, actual) is actual
+    assert torch.equal(actual.view(torch.int32), expected.view(torch.int32))
+    assert torch.equal(actual.argmax(-1), expected.argmax(-1))
+    assert torch.all(storage[:, vocab:] == -123.0)
 
 
 def _reference(op_name: str, x: torch.Tensor) -> torch.Tensor:
