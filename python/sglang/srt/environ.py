@@ -1214,6 +1214,9 @@ class Envs:
     # gfx1250 decode over an fp8 KV cache: the fused RoPE + KV-write kernel writes Q
     # directly in fp8 (static scale 1.0, saturating), so decode needs no Q copy/quant kernels.
     SGLANG_2X_DECODE_Q_FP8_ROPE = EnvBool(False)
+    # Debug, eager only: with SGLANG_2X_DECODE_Q_FP8_ROPE, log the unclamped post-RoPE Q range
+    # (amax, count above the fp8 max) of every decode call; costs an extra RoPE pass.
+    SGLANG_2X_DEBUG_Q_FP8_PROBE = EnvBool(False)
     SGLANG_ROCM_FUSED_DECODE_MLA = EnvBool(False)
     # Apply RoPE inside the ROCm fused MLA decode kernel instead of before it.
     SGLANG_FUSED_MLA_ENABLE_ROPE_FUSION = EnvBool(True)

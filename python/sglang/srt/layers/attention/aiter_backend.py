@@ -951,6 +951,7 @@ class AiterAttnBackend(AttentionBackend):
                 "SGLANG_USE_AITER_UNIFIED_ATTN"
             )
         self.decode_kv_head_first = envs.SGLANG_2X_DECODE_KV_HEAD_FIRST.get()
+        self.decode_q_fp8_rope = envs.SGLANG_2X_DECODE_Q_FP8_ROPE.get()
         if self.decode_kv_head_first and (
             not is_gfx1250_supported()
             or "decode_kv_head_first"
@@ -1346,7 +1347,7 @@ class AiterAttnBackend(AttentionBackend):
         scale computed on the GPU each call (graph safe, no host sync).
         Returns ``(q, q_descale)``.
         """
-        if q.dtype == fp8_dtype:
+        if self.decode_q_fp8_rope and q.dtype == fp8_dtype:
             # already fp8: written by the fused RoPE + KV-write kernel at the static
             # scale 1.0 (SGLANG_2X_DECODE_Q_FP8_ROPE), whatever the mode
             return q, self.q_scale

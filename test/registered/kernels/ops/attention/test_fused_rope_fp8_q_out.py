@@ -44,9 +44,20 @@ def _run(q, k, v, kc, vc, slots, pos, cos_sin, q_out, scale):
     )
 
 
-@pytest.mark.parametrize("tokens,qh,kh", [(1, 32, 4), (44, 32, 4), (168, 32, 4), (84, 64, 8), (192, 32, 4)])
+@pytest.mark.parametrize(
+    "tokens,qh,kh,cos_dtype",
+    [
+        (1, 32, 4, torch.float32),
+        (44, 32, 4, torch.bfloat16),
+        (168, 32, 4, torch.float32),
+        (84, 64, 8, torch.float32),
+        (192, 32, 4, torch.bfloat16),
+        # >= 256 tokens with an fp32 cos/sin table takes the tiled kernel
+        (512, 32, 4, torch.float32),
+    ],
+)
 @pytest.mark.parametrize("magnitude", [1.0, 600.0])
-def test_fp8_q_out_matches_fp32_clamped(gfx1250, tokens, qh, kh, magnitude):
+def test_fp8_q_out_matches_fp32_clamped(gfx1250, tokens, qh, kh, cos_dtype, magnitude):
     torch.manual_seed(tokens * 31 + qh)
     d, page, pages = 64, 64, 64
     dev = "cuda"
@@ -59,7 +70,7 @@ def test_fp8_q_out_matches_fp32_clamped(gfx1250, tokens, qh, kh, magnitude):
     inv = 1.0 / (150000 ** (torch.arange(0, d, 2, device=dev, dtype=torch.float32) / d))
     t = torch.arange(4096, device=dev, dtype=torch.float32)
     freqs = torch.outer(t, inv)
-    cos_sin = torch.cat([freqs.cos(), freqs.sin()], dim=-1).to(torch.bfloat16)
+    cos_sin = torch.cat([freqs.cos(), freqs.sin()], dim=-1).to(cos_dtype)
     slots = torch.randperm(pages * page, device=dev)[:tokens].long()
     scale = torch.ones(1, device=dev, dtype=torch.float32)
 
@@ -69,6 +80,7 @@ def test_fp8_q_out_matches_fp32_clamped(gfx1250, tokens, qh, kh, magnitude):
             torch.zeros(pages, page, kh, d, device=dev, dtype=fp8_dtype),
         )
 
+    qkv_before = qkv.clone()
     kc0, vc0 = caches()
     q32 = torch.empty(tokens, qh, d, device=dev, dtype=torch.float32)
     _run(q, k, v, kc0, vc0, slots, pos, cos_sin, q32, scale)
@@ -83,5 +95,5 @@ def test_fp8_q_out_matches_fp32_clamped(gfx1250, tokens, qh, kh, magnitude):
     assert torch.equal(q8.view(torch.uint8), want.view(torch.uint8))
     assert torch.equal(kc0.view(torch.uint8), kc1.view(torch.uint8))
     assert torch.equal(vc0.view(torch.uint8), vc1.view(torch.uint8))
-    # the input q (a view into qkv) is not written when q_out is a separate fp8 tensor
-    assert torch.equal(q, qkv[:, : qh * d].view(tokens, qh, d))
+    # neither call writes the input qkv when q_out and k_out are separate tensors
+    assert torch.equal(qkv.view(torch.int16), qkv_before.view(torch.int16))

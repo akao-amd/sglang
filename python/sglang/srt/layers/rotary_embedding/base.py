@@ -454,6 +454,35 @@ class RotaryEmbedding(BaseFusedOp):
                 positions, query, key, offsets, fused_set_kv_buffer_arg
             )
 
+    def _probe_q_fp8_range(self, positions, query, key, is_shuffle_5d, extra_args, q_out_dtype):
+        # Same kernel with an fp32 q_out and a scratch k_out, run before the real call: key stays
+        # unrotated and the cache receives the same values twice.
+        q32 = torch.empty(query.shape, dtype=torch.float32, device=query.device)
+        fused_qk_rope_reshape_and_cache(
+            q=query,
+            k=key,
+            pos=positions,
+            cos_sin=self.cos_sin_cache,
+            is_neox=self.is_neox_style,
+            flash_layout=not is_shuffle_5d,
+            offs=None,
+            q_out=q32,
+            k_out=torch.empty_like(key),
+            output_zeros=False,
+            **extra_args,
+        )
+        fmax = torch.finfo(q_out_dtype).max
+        a = q32.abs()
+        logger.info(
+            "q-fp8 probe: tokens=%d heads=%d finite=%s amax=%.4g over_fp8_max=%d of %d",
+            q32.shape[0],
+            q32.shape[1],
+            bool(torch.isfinite(q32).all()),
+            float(a.max()),
+            int((a > fmax).sum()),
+            q32.numel(),
+        )
+
     def forward_cuda(
         self,
         positions: torch.Tensor,
@@ -504,6 +533,12 @@ class RotaryEmbedding(BaseFusedOp):
                     if q_out_dtype is None
                     else torch.empty(query.shape, dtype=q_out_dtype, device=query.device)
                 )
+                if (
+                    q_out_dtype is not None
+                    and envs.SGLANG_2X_DEBUG_Q_FP8_PROBE.get()
+                    and not torch.cuda.is_current_stream_capturing()
+                ):
+                    self._probe_q_fp8_range(positions, query, key, is_shuffle_5d, extra_args, q_out_dtype)
                 query, key, k_cache, v_cache = fused_qk_rope_reshape_and_cache(
                     q=query,
                     k=key,
