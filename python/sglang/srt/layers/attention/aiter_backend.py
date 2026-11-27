@@ -6038,7 +6038,7 @@ class AiterAttnBackend(AttentionBackend):
                     and layer.tp_q_head_num == layer.tp_k_head_num * 8
                     and layer.tp_k_head_num == layer.tp_v_head_num
                     and layer.tp_k_head_num in (4, 8)
-                    and q.dtype == torch.bfloat16
+                    and q.dtype in (torch.bfloat16, fp8_dtype)
                     and self.kv_cache_dtype == fp8_dtype
                 ):
                     decode_options = {"decode_kv_head_first": True}
