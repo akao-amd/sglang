@@ -396,7 +396,7 @@ def create_fused_set_kv_buffer_arg(
             value_cache = paged_kv_view(
                 v_buffer, page_size, layer.tp_v_head_num, layer.v_head_dim
             )
-        return {
+        args = {
             "v": value.view(-1, layer.tp_v_head_num, layer.v_head_dim),
             "k_scale": layer.k_scale,
             "v_scale": layer.v_scale,
@@ -405,6 +405,15 @@ def create_fused_set_kv_buffer_arg(
             "slot_mapping": forward_batch.out_cache_loc,
             "swa_slot_mapping": slot_mapping_swa,
         }
+        # decode over an fp8 KV cache: write Q as fp8 in the same kernel (static scale 1.0);
+        # the attention backend takes a prequantized fp8 Q with its static q scale
+        if (
+            envs.SGLANG_2X_DECODE_Q_FP8_ROPE.get()
+            and forward_batch.forward_mode.is_decode()
+            and key_cache.dtype in (torch.float8_e4m3fn, torch.float8_e4m3fnuz)
+        ):
+            args["q_out_dtype"] = key_cache.dtype
+        return args
 
 
 def maybe_enable_silu_fp4_quant_fusion(mlp: torch.nn.Module) -> None:

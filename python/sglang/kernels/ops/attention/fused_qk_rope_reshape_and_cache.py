@@ -102,6 +102,17 @@ def _get_neox_rotated_x(
 
 
 @triton.jit
+def _to_q_out(x, dtype: tl.constexpr):
+    """Rotated Q in the output dtype. An FP8 output (decode Q prequantized here, static
+    scale 1.0) saturates at the e4m3 range instead of overflowing."""
+    if dtype == tl.float8e4nv:
+        x = tl.clamp(x.to(tl.float32), -448.0, 448.0)
+    elif dtype == tl.float8e4b8:
+        x = tl.clamp(x.to(tl.float32), -240.0, 240.0)
+    return x.to(dtype)
+
+
+@triton.jit
 def _unit_rope(
     x_ptrs,
     cos,
@@ -354,7 +365,7 @@ def _fused_qk_rope_reshape_and_cache_kernel(
             + pid_hq * q_out_stride_h
             + d_pe_offs * q_out_stride_d
         )
-        tl.store(q_out_ptrs, q_pe.to(q_out_ptr.dtype.element_ty))
+        tl.store(q_out_ptrs, _to_q_out(q_pe, q_out_ptr.dtype.element_ty))
 
         if HAVE_ZEROS:
             z = tl.zeros((BLOCK_D_pe,), dtype=zeros_out_ptr.dtype.element_ty)
@@ -684,8 +695,10 @@ def _fused_qk_rope_cache_tiled_kernel(
             + h_offs[None, :, None] * q_out_stride_h
             + d_offs[None, None, :]
         )
-        tl.store(q_dst, q_o1.to(q_out_ptr.dtype.element_ty), mask=q_m3)
-        tl.store(q_dst + HALF, q_o2.to(q_out_ptr.dtype.element_ty), mask=q_m3)
+        tl.store(q_dst, _to_q_out(q_o1, q_out_ptr.dtype.element_ty), mask=q_m3)
+        tl.store(
+            q_dst + HALF, _to_q_out(q_o2, q_out_ptr.dtype.element_ty), mask=q_m3
+        )
     else:
         slot = tl.load(slot_mapping_ptr + t_offs, mask=t_mask, other=-1).to(tl.int64)
         if HAS_SWA:

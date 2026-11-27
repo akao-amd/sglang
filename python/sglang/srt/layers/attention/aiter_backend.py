@@ -1346,6 +1346,10 @@ class AiterAttnBackend(AttentionBackend):
         scale computed on the GPU each call (graph safe, no host sync).
         Returns ``(q, q_descale)``.
         """
+        if q.dtype == fp8_dtype:
+            # already fp8: written by the fused RoPE + KV-write kernel at the static
+            # scale 1.0 (SGLANG_2X_DECODE_Q_FP8_ROPE), whatever the mode
+            return q, self.q_scale
         if mode == "bf16":
             return q, None
         if mode == "dynamic":

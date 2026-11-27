@@ -1211,6 +1211,9 @@ class Envs:
     SGLANG_AITER_KV_CACHE_LAYOUT = EnvStr("nhd")
     # Full-attention decode experiment: visit adjacent KV heads together.
     SGLANG_2X_DECODE_KV_HEAD_FIRST = EnvBool(False)
+    # gfx1250 decode over an fp8 KV cache: the fused RoPE + KV-write kernel writes Q
+    # directly in fp8 (static scale 1.0, saturating), so decode needs no Q copy/quant kernels.
+    SGLANG_2X_DECODE_Q_FP8_ROPE = EnvBool(False)
     SGLANG_ROCM_FUSED_DECODE_MLA = EnvBool(False)
     # Apply RoPE inside the ROCm fused MLA decode kernel instead of before it.
     SGLANG_FUSED_MLA_ENABLE_ROPE_FUSION = EnvBool(True)

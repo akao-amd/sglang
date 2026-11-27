@@ -479,7 +479,7 @@ class RotaryEmbedding(BaseFusedOp):
             )
         else:
             if fused_set_kv_buffer_arg is not None and _is_hip:
-                extra_args = fused_set_kv_buffer_arg
+                extra_args = dict(fused_set_kv_buffer_arg)
                 k_cache = fused_set_kv_buffer_arg["key_cache"]
                 # 5D SHUFFLE pool feeds raw (N, H, D/x, page, x) K cache;
                 # NHD 3D pool feeds the legacy 4D paged view. Auto-detect.
@@ -496,6 +496,14 @@ class RotaryEmbedding(BaseFusedOp):
                 tokens = key.shape[0]
                 query = query.view(tokens, -1, qk_head_dim)
 
+                # an fp8 q_out (SGLANG_2X_DECODE_Q_FP8_ROPE): the kernel writes the rotated
+                # Q quantized (static scale 1.0, saturating) instead of in place
+                q_out_dtype = extra_args.pop("q_out_dtype", None)
+                q_out = (
+                    query
+                    if q_out_dtype is None
+                    else torch.empty(query.shape, dtype=q_out_dtype, device=query.device)
+                )
                 query, key, k_cache, v_cache = fused_qk_rope_reshape_and_cache(
                     q=query,
                     k=key,
@@ -504,7 +512,7 @@ class RotaryEmbedding(BaseFusedOp):
                     is_neox=self.is_neox_style,
                     flash_layout=not is_shuffle_5d,
                     offs=None,
-                    q_out=query,
+                    q_out=q_out,
                     k_out=key,
                     output_zeros=False,
                     **extra_args,
