@@ -151,6 +151,13 @@ class ProfileManager:
             first_rank_in_node=self.first_rank_in_node,
             output_suffix=f"-{stage}" if stage else "",
         )
+        # Drain outstanding graph work before the profiler interposes on GPU
+        # queues. On ROCm, in-flight cross-stream barriers can otherwise hang
+        # when tracing starts during a breakable graph's execution.
+        if torch.cuda.is_available() and "GPU" in (
+            self.profiler_kwargs.get("activities") or []
+        ):
+            torch.cuda.synchronize()
         self.profiler.start()
 
     def _do_stop(self):
