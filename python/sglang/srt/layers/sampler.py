@@ -139,6 +139,10 @@ class Sampler(nn.Module):
 
         self.output_logprob_processor = OutputLogprobProcessor()
 
+    def supports_torch_greedy_argmax(self) -> bool:
+        """Whether HIP greedy preserves Torch's first-NaN and first-index contract."""
+        return _is_hip and (not _use_aiter or _disable_aiter_greedy_sample)
+
     def forward(
         self,
         logits_output: LogitsProcessorOutput,

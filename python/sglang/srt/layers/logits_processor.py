@@ -229,7 +229,7 @@ class RequestCustomizedInfo(_TypedCustomizedInfo):
 class LogitsProcessorOutput:
     ## Part 1: This part will be assigned in python/sglang/srt/layers/logits_processor.py::LogitsProcessor
     # The logits of the next tokens.       shape: [#seq, vocab_size]
-    # Can be None for certain prefill-only requests (e.g., multi-item scoring) that don't need next token generation
+    # Can be None for prefill-only requests or after a deferred greedy sample.
     next_token_logits: Optional[torch.Tensor]
     # Used by speculative decoding (EAGLE)
     # The last hidden layers
@@ -240,6 +240,8 @@ class LogitsProcessorOutput:
     # When set, next_token_logits is this rank's [#seq, V / tp] vocabulary shard,
     # laid out as this VocabShard describes.
     next_token_logits_vocab_shard: Optional[Any] = None
+    # Decode graph output stays local until SamplingPipeline reduces or gathers it.
+    next_token_logits_deferred_processor: Optional["LogitsProcessor"] = None
 
     # Post-norm last-layer hidden states of every token, kept under full capture
     # when `hidden_states` holds the aux hidden states
@@ -411,6 +413,7 @@ class LogitsMetadata:
 
     # TARGET_VERIFY: keep this batch's logits as vocabulary shards.
     verify_vocab_shards: bool = False
+    decode_deferred_gather: bool = False
 
     @classmethod
     def from_forward_batch(cls, forward_batch: ForwardBatch):
@@ -576,6 +579,18 @@ class LogitsProcessor(nn.Module):
             self.final_logit_softcapping = None
 
         self.return_full_logits = return_full_logits
+        self.defer_decode_gather = (
+            envs.SGLANG_ENABLE_SHARDED_GREEDY_DECODE.get()
+            # CUDA JIT argmax has a different NaN contract. SamplingPipeline
+            # checks the active HIP greedy implementation's contract each step.
+            and is_hip()
+            and self.do_tensor_parallel_all_gather
+            and not self.use_attn_tp_group
+            and not self.do_tensor_parallel_all_gather_dp_attn
+            and not self.use_tp_lm_head_all_to_all
+            and not return_full_logits
+            and get_spec().speculative_algorithm is None
+        )
         features = get_exec().features
         self.keep_last_hidden_states = features.aux_hidden_state_capture is not None
         # Capture-only mode: how many layers the model must capture, when
@@ -810,6 +825,9 @@ class LogitsProcessor(nn.Module):
             # Decode mode or extend mode without return_logprob.
             return LogitsProcessorOutput(
                 next_token_logits=sampled_logits,
+                next_token_logits_deferred_processor=(
+                    self if logits_metadata.decode_deferred_gather else None
+                ),
                 hidden_states=hidden_states_to_store,
                 last_hidden_states=last_hidden_states_to_store,
                 mm_input_embeds=logits_metadata.mm_input_embeds,
@@ -1238,6 +1256,10 @@ class LogitsProcessor(nn.Module):
         if self.logit_scale is not None:
             logits.mul_(self.logit_scale)
 
+        if self._can_defer_decode_gather(logits, lm_head, logits_metadata):
+            logits_metadata.decode_deferred_gather = True
+            return logits
+
         if self._can_gather_softcap_fused(
             logits, local_hidden_states, lm_head, logits_metadata
         ):
@@ -1309,6 +1331,30 @@ class LogitsProcessor(nn.Module):
 
         return logits
 
+    def _can_defer_decode_gather(
+        self,
+        logits: torch.Tensor,
+        lm_head: VocabParallelEmbedding,
+        logits_metadata: LogitsMetadata,
+    ) -> bool:
+        # Added-vocabulary layouts interleave original and added ranges across
+        # ranks. The candidate helper requires one contiguous range per rank.
+        # Candidate indices travel as fp32, including the empty-shard sentinel.
+        return (
+            self.defer_decode_gather
+            and logits_metadata.forward_mode.is_decode()
+            and self.beam_trie_output_head is None
+            and isinstance(lm_head, VocabParallelEmbedding)
+            and lm_head.shard_indices.num_added_elements_padded == 0
+            and logits.is_cuda
+            and not (_is_npu or _is_cpu)
+            and logits.dtype in (torch.float32, torch.bfloat16, torch.float16)
+            and logits.ndim == 2
+            and logits.stride(1) == 1
+            and 0 < self.vocab_size < 2**24
+            and lm_head.num_embeddings_padded < 2**24
+        )
+
     def _can_gather_softcap_fused(
         self,
         logits: torch.Tensor,
@@ -1364,22 +1410,35 @@ class LogitsProcessor(nn.Module):
         # full-width call (the prefill logits).
         return self._logits_gatherer(logits)[:, : self.vocab_size].float()
 
-    def deferred_argmax(self, logits: torch.Tensor) -> torch.Tensor:
-        """Full-logits ``argmax`` from a target-verify vocab shard; ties resolve to
+    def sharded_greedy_consensus(self, eligible: bool) -> bool:
+        """Agree on the next collective's payload size while the model graph runs."""
+        group = get_parallel().tp_group
+        allowed = torch.tensor([eligible], dtype=torch.int32, device="cpu")
+        torch.distributed.all_reduce(
+            allowed, op=torch.distributed.ReduceOp.MIN, group=group.cpu_group
+        )
+        return bool(allowed.item())
+
+    def deferred_argmax(
+        self, logits: torch.Tensor, *, torch_compatible: bool = False
+    ) -> torch.Tensor:
+        """Full-logits ``argmax`` from a deferred vocab shard; ties resolve to
         the lowest vocab index, as ``torch.argmax`` over the gathered row does."""
         group = get_parallel().tp_group
         num_tokens = logits.shape[0]
-        local = self.deferred_local_argmax(logits)
+        local = self.deferred_local_argmax(logits, torch_compatible=torch_compatible)
         gathered = torch.empty(
             (group.world_size, num_tokens, 2), dtype=local.dtype, device=local.device
         )
         group.all_gather_into_tensor(gathered.view(-1, 2), local)
         if is_hip():
-            return merge_row_argmax_shards(gathered)
+            return merge_row_argmax_shards(gathered, torch_compatible=torch_compatible)
         best_rank = gathered[..., 0].argmax(dim=0, keepdim=True)
         return gathered[..., 1].gather(0, best_rank).squeeze(0).long()
 
-    def deferred_local_argmax(self, logits: torch.Tensor) -> torch.Tensor:
+    def deferred_local_argmax(
+        self, logits: torch.Tensor, *, torch_compatible: bool = False
+    ) -> torch.Tensor:
         """This rank's row maxima of a target-verify vocab shard: fp32 [num_tokens, 2]
         (the (softcapped) max, its global vocab index)."""
         group = get_parallel().tp_group
@@ -1387,7 +1446,11 @@ class LogitsProcessor(nn.Module):
         col_offset = group.rank_in_group * shard_width
         valid_width = max(0, min(shard_width, self.vocab_size - col_offset))
         return softcap_row_argmax(
-            logits, self.final_logit_softcapping, valid_width, col_offset
+            logits,
+            self.final_logit_softcapping,
+            valid_width,
+            col_offset,
+            torch_compatible=torch_compatible,
         )
 
     def _gather_softcap_fused(

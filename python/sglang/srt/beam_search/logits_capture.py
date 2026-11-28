@@ -82,6 +82,14 @@ def capture_pre_sample_logits(
     ):
         return
     if batch.beam_tail is not None:
+        deferred = logits_output.next_token_logits_deferred_processor
+        if deferred is not None:
+            # The scheduled beam tail is identical across TP ranks. Resolve the
+            # full vocabulary before capture and before splitting off leaders.
+            logits_output.next_token_logits = deferred.finish_deferred_gather(
+                logits_output.next_token_logits
+            )
+            logits_output.next_token_logits_deferred_processor = None
         # Split off the reqs-aligned view: outside it the tail survives the
         # in-place sampling writes, but the leader rows do not, hence the clone.
         n = batch.beam_tail.num_base_rows

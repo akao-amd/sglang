@@ -51,6 +51,14 @@ class UocrGreedyGraph:
         """Record the argmax of the captured logits into ``ids``."""
         if out is None:
             return
+        deferred = out.next_token_logits_deferred_processor
+        if deferred is not None:
+            # This capture hook samples and relays tokens inside the graph,
+            # before SamplingPipeline can reduce vocabulary-shard candidates.
+            out.next_token_logits = deferred.finish_deferred_gather(
+                out.next_token_logits
+            )
+            out.next_token_logits_deferred_processor = None
         logits = out.next_token_logits
         torch.argmax(logits, dim=-1, keepdim=False, out=self.ids[: logits.shape[0]])
         if self._relay_tail is not None:

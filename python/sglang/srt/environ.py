@@ -1194,6 +1194,10 @@ class Envs:
     # stays accuracy-gated and default OFF.
     SGLANG_ENABLE_DP_GATHER_FP8 = EnvBool(False)
     SGLANG_USE_AITER_UNIFIED_ATTN = EnvBool(False)
+    # Keep ordinary decode logits on vocabulary shards until sampling. Only
+    # unmodified greedy batches use the candidate reduction; other consumers
+    # materialize full logits after TP ranks agree on the collective payload.
+    SGLANG_ENABLE_SHARDED_GREEDY_DECODE = EnvBool(False)
     # Select the gate/up tile layout for AITER MoE: True -> interleave
     # (matches FlyDSL `gate_mode="interleave"` kernels), False -> separated
     # (matches `gate_mode="separated"`, the layout used by gptoss_fp4 tuned

@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple
 import msgspec
 import torch
 
+from sglang.srt.environ import envs
 from sglang.srt.layers.logprob_processor import compute_spec_logprobs
 from sglang.srt.sampling.custom_logit_processor import apply_custom_logit_processor
 from sglang.srt.sampling.grammar_mask import apply_grammar_mask
@@ -76,6 +77,48 @@ class SamplingPipeline(msgspec.Struct, frozen=True):
         sampling_info = forward_batch.sampling_info
         if observer is not None and not observer.is_active(sampling_info):
             observer = None
+        deferred = logits_output.next_token_logits_deferred_processor
+        if deferred is not None:
+            from sglang.srt.layers.sampler import Sampler
+
+            has_grammar = bool(sampling_info.grammars) and any(
+                g is not None for g in sampling_info.grammars
+            )
+            eligible = (
+                type(self.sampler) is Sampler
+                and self.sampler.supports_torch_greedy_argmax()
+                and observer is None
+                and self.watermark is None
+                and graph_token_ids is None
+                and sampling_info.is_all_greedy
+                and not VerifyRoute.derive(
+                    sampling_info,
+                    has_grammar=has_grammar,
+                    has_watermark=(
+                        self.watermark is not None
+                        or sampling_info.watermark is not None
+                    ),
+                ).adjusts_logits
+                and not forward_batch.return_logprob
+                and sampling_info.sampling_mask_batch_indices is None
+                and not envs.SGLANG_SANITIZE_NAN_LOGITS.get()
+                and not envs.SGLANG_ENABLE_NAN_LOGITS_CHECK.get()
+                and not envs.SGLANG_ENABLE_ASYNC_ASSERT.get()
+            )
+            # Observers and plugin samplers can exist on only one rank. All ranks
+            # must choose the same payload size for the following logits gather.
+            if deferred.sharded_greedy_consensus(eligible):
+                next_token_ids = deferred.deferred_argmax(
+                    logits_output.next_token_logits, torch_compatible=True
+                )
+                self.sampler._sync_token_ids_across_tp(next_token_ids, sampling_info)
+                logits_output.next_token_logits_deferred_processor = None
+                logits_output.next_token_logits = None
+                return next_token_ids
+            logits_output.next_token_logits = deferred.finish_deferred_gather(
+                logits_output.next_token_logits
+            )
+            logits_output.next_token_logits_deferred_processor = None
         observer_state = _adjust_before_watermark(
             logits_output.next_token_logits, sampling_info, observer=observer
         )
@@ -171,6 +214,12 @@ class SamplingPipeline(msgspec.Struct, frozen=True):
         """The requested tokens' logprobs, without sampling or the watermark."""
         if not forward_batch.token_ids_logprobs:
             return
+        deferred = logits_output.next_token_logits_deferred_processor
+        if deferred is not None:
+            logits_output.next_token_logits = deferred.finish_deferred_gather(
+                logits_output.next_token_logits
+            )
+            logits_output.next_token_logits_deferred_processor = None
         sampling_info = forward_batch.sampling_info
         _adjust_before_watermark(
             logits_output.next_token_logits, sampling_info, observer=None
